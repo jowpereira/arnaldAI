@@ -1,0 +1,67 @@
+*** Begin Patch
+*** Update File: SPEC.md
+@@
+ ## 6. Vis?o Geral de Arquitetura
+ `
+ Usu?rio ? Interface Conversacional ? Intent Compiler ? Task Compiler
+                                           ?                 ?
+                                Cognitive Control Plane    Capability Registry
+                                           ?                 ?
+                           Organization Generator ? Policy Engine ? Runtime Adapter
+                                           ?                                   ?
+                                  Memory System ? Evidence Ledger ? Runtime Eventos
+                                           ?
+                                    Evolution Engine / Reality Gap Detector
+ `
++- Visualiza??o adicional (camadas horizontais):
++`
+++----------------------+----------------------+----------------------+----------------------+
++|   Camada de Inten??o | Camada Cognitiva     | Camada de Execu??o   | Camada de Evid?ncia  |
++|  Usu?rio -> Interface| Cognitive Control    | Organization Generator| Evidence Ledger <->  |
++|  -> Intent -> Task   | Plane <-> Capabilities| -> Runtime/Tool Forge| Memory/Evolution/Gaps|
+++----------------------+----------------------+----------------------+----------------------+
++`
+@@
+ ## 8. Modos de Autonomia
+ | Modo       | Permiss?es padr?o                                   | Regras de interven??o                                       |
+ |-----------|------------------------------------------------------|-------------------------------------------------------------|
+ | manual  | Somente leitura, sem efeitos externos, subagente bloqueado | Cada etapa requer confirma??o humana.                        |
+ | ssistido | Rede leitura, ferramentas diagn?sticas, subagentes limitados | Checkpoints em etapas de risco; humano pode delegar exce??es. |
+ | utonomo | Ferramentas externas permitidas (dentro de pol?ticas), cria??o de subagentes, escrita controlada | Humano acionado apenas em falhas cr?ticas ou or?amento excedido. |
+ - Policy Engine ajusta permiss?es com base em confian?a hist?rica (mem?ria negativa reduz limites).
++
++- Fluxo de decis?o visual por modo de autonomia:
++`
++          +-----------+
++          | Intento?  |
++          +-----+-----+
++                |
++        +-------v--------+
++        | Escolher modo  |
++        | manual/assist  |
++        | /autonomo      |
++        +---+-------+----+
++            |       |
++          manual    | assist/autonomo
++            |       |
++    +-------v---+   |    +------------------------+
++    | Policy    |   |    | Policy aplica limites  |
++    | bloqueia  |   |    | graduais e thresholds  |
++    | efeitos   |   |    +-----------+------------+
++    +-------+---+   |                |
++            |       |      +---------v----------+
++    +-------v---+   |      | Runtime + Subagentes|
++    | Runtime   |   |      | Tool Forge opcional |
++    | local     |   |      +-----+---------------+
++    +-------+---+   |            |
++            |       |   +--------v--------+
++    +-------v----+  |   | Checkpoints     |
++    | Checkpoint |  |   | din?micos       |
++    | humano     |  |   +--------+--------+
++    +-------+----+  |            |
++            |       |   +--------v--------+
++            +-------+-->| Intera??o com    |
++                        | usu?rio          |
++                        +------------------+
++`
+*** End Patch
