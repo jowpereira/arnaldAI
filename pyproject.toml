@@ -1,9 +1,43 @@
 [project]
 name = "arnaldo"
-version = "0.1.0"
-description = "Nucleo minimo do assistente Arnaldo."
-requires-python = ">=3.7"
-dependencies = []
+version = "0.2.0"
+description = "Kernel cognitivo — substrate simbólico para agentes que aprendem com auditabilidade."
+requires-python = ">=3.12"
+dependencies = [
+    # Grafo cognitivo
+    "networkx>=3.2",        # estrutura de grafo (nós + arestas tipadas + traversal)
+    "numpy>=1.24",          # vetorização de embeddings + similaridade
+
+    # Persistência estruturada
+    "msgpack>=1.0",         # serialização binária do grafo (mais compacta que JSON)
+]
+
+[project.optional-dependencies]
+# Embeddings reais (Fase 2+)
+embeddings = [
+    "sentence-transformers>=2.5",  # embeddings locais
+]
+
+# Backends de grafo de produção (Fase 4+)
+graph-backends = [
+    "neo4j>=5.0",
+    "falkordb>=1.0",
+]
+
+# Web foraging (Fase 5+)
+foraging = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+]
+
+# Dev
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
 
 [project.scripts]
 arnaldo = "arnaldo.cli:main"
@@ -11,3 +45,20 @@ arnaldo = "arnaldo.cli:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["arnaldo*"]
+exclude = ["runs*", "storage*", "tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+strict_optional = true
