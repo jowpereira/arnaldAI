@@ -13,3 +13,7 @@ runs/
 
 # Estado persistente do harness
 storage/
+
+# Artefatos locais de desenvolvimento
+.claude/
+*.egg-info/
