@@ -109,6 +109,7 @@ class OrganizationIR:
     workflow: List[Dict[str, Any]]
     required_capabilities: List[str]
     human_checkpoints: List[Dict[str, Any]]
+    communication_plan: Dict[str, Any] | None = None
 
 
 @dataclass
@@ -121,6 +122,9 @@ class PolicyDecision:
     approval_required: bool
     reasons: List[str]
     constraints: Dict[str, Any]
+    escalation_plan: Dict[str, Any]
+    notes: List[str]
+    telemetry: Dict[str, Any]
 
 
 @dataclass
@@ -148,3 +152,4 @@ class RunResult:
     run_id: str
     run_dir: Path
     files: Dict[str, Path]
+    session_id: str | None = None

@@ -34,3 +34,15 @@ class RunStore:
         path = self.path(name)
         path.write_text(content, encoding="utf-8")
         return path
+
+    def hash_file(self, name: str) -> str:
+        path = self.path(name)
+        if not path.exists():
+            return ""
+        import hashlib
+
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8192), b""):
+                digest.update(chunk)
+        return digest.hexdigest()

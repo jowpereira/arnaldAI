@@ -1,37 +1,70 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 from arnaldo.contracts import (
     EvidenceRecord,
-    OrganizationIR,
-    PolicyDecision,
     RuntimeEvent,
-    TaskIR,
     new_id,
     to_dict,
     utc_now,
 )
 from arnaldo.storage import RunStore
 
+from .base import RuntimeAdapter, RuntimeContext, RuntimeResult
 
-class LocalRuntime:
+
+class LocalRuntime(RuntimeAdapter):
     """Deterministic runtime adapter used before external agent frameworks exist."""
 
     def run(
         self,
-        run_id: str,
-        task: TaskIR,
-        organization: OrganizationIR,
-        policy: PolicyDecision,
+        context: RuntimeContext,
         store: RunStore,
-    ) -> Dict[str, Any]:
-        self._trace(store, run_id, "runtime_started", {"organization_id": organization.id})
+    ) -> RuntimeResult:
+        run_id = context.run_id
+        task = context.task
+        organization = context.organization
+        policy = context.policy
+        sandbox = context.sandbox or {}
+        workspace_path = self._resolve_sandbox_dir(sandbox.get("workspace_path"))
+        artifacts_path = self._resolve_sandbox_dir(sandbox.get("artifacts_path"))
+        temp_path = self._resolve_sandbox_dir(sandbox.get("temp_path"))
+
+        self._trace(
+            store,
+            run_id,
+            "runtime_started",
+            {
+                "organization_id": organization.id,
+                "sandbox_id": sandbox.get("id", ""),
+                "sandbox_workspace": sandbox.get("workspace_path", ""),
+                "sandbox_artifacts": sandbox.get("artifacts_path", ""),
+                "sandbox_temp": sandbox.get("temp_path", ""),
+            },
+        )
+        if workspace_path:
+            (workspace_path / "runtime-session.txt").write_text(
+                "run_id=%s\ntask_id=%s\norganization_id=%s\n"
+                % (run_id, task.id, organization.id),
+                encoding="utf-8",
+            )
+            self._trace(
+                store,
+                run_id,
+                "sandbox_prepared",
+                {"workspace": str(workspace_path), "artifacts": str(artifacts_path or "")},
+            )
         step_results = []
 
-        for item in organization.workflow:
+        for index, item in enumerate(organization.workflow, start=1):
             self._trace(store, run_id, "step_started", item)
             result = execute_step(task, item)
+            step_artifact = self._write_step_artifact(artifacts_path, index, item["action"], result)
+            if step_artifact:
+                result["sandbox_artifact"] = str(step_artifact)
             step_results.append(result)
             self._evidence(
                 store,
@@ -45,19 +78,40 @@ class LocalRuntime:
 
         artifact = render_artifact(task, organization, policy, step_results)
         artifact_path = store.write_text("artifact.md", artifact)
+        sandbox_artifact_path = None
+        if artifacts_path:
+            sandbox_artifact_path = artifacts_path / "artifact.md"
+            sandbox_artifact_path.write_text(artifact, encoding="utf-8")
         self._evidence(
             store,
             run_id,
             task.id,
             "artifact_created",
             "Artefato principal gerado pelo runtime local.",
-            {"path": str(artifact_path)},
+            {
+                "path": str(artifact_path),
+                "sandbox_path": str(sandbox_artifact_path or ""),
+            },
         )
-        self._trace(store, run_id, "runtime_completed", {"artifact": str(artifact_path)})
-        return {
-            "artifact_path": str(artifact_path),
-            "step_results": step_results,
-        }
+        if temp_path:
+            temp_marker = temp_path / "runtime-finished.txt"
+            temp_marker.write_text("completed=true\n", encoding="utf-8")
+        self._trace(
+            store,
+            run_id,
+            "runtime_completed",
+            {
+                "artifact": str(artifact_path),
+                "sandbox_artifact": str(sandbox_artifact_path or ""),
+            },
+        )
+        agent_bus = store.write_text("agent_bus.jsonl", "")
+
+        return RuntimeResult(
+            artifact_path=artifact_path,
+            step_results=step_results,
+            agent_bus_path=agent_bus,
+        )
 
     def _trace(self, store: RunStore, run_id: str, event_type: str, payload: Dict[str, Any]) -> None:
         event = RuntimeEvent(
@@ -88,6 +142,27 @@ class LocalRuntime:
             payload=payload,
         )
         store.append_jsonl("evidence.jsonl", to_dict(record))
+
+    def _resolve_sandbox_dir(self, raw_path: Any) -> Path | None:
+        if not raw_path:
+            return None
+        path = Path(str(raw_path))
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _write_step_artifact(
+        self,
+        artifacts_path: Path | None,
+        index: int,
+        action: str,
+        payload: Dict[str, Any],
+    ) -> Path | None:
+        if artifacts_path is None:
+            return None
+        safe_action = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in action)
+        path = artifacts_path / ("step-%02d-%s.json" % (index, safe_action))
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        return path
 
 
 def execute_step(task: TaskIR, item: Dict[str, Any]) -> Dict[str, Any]:

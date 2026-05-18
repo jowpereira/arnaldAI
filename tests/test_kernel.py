@@ -3,15 +3,27 @@ import json
 import tempfile
 import unittest
 
+from arnaldo.components import CapabilityRegistry, ToolForge
 from arnaldo.kernel import ArnaldoKernel
+from arnaldo.memory import MemoryStore
+from arnaldo.runtime import SandboxManager
+from arnaldo.session import SessionManager
 
 
 class KernelTest(unittest.TestCase):
     def test_run_generates_generic_contracts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            result = ArnaldoKernel().run(
+            base = Path(tmp)
+            kernel = ArnaldoKernel(
+                memory=MemoryStore(base / "memory"),
+                session_manager=SessionManager(base / "sessions"),
+                tool_forge=ToolForge(base / "tool_forge"),
+                capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
+                sandbox_manager=SandboxManager(base / "sandboxes"),
+            )
+            result = kernel.run(
                 "Crie um plano inicial para uma ferramenta B2B de automacao",
-                output_dir=Path(tmp),
+                output_dir=base / "runs",
             )
 
             self.assertTrue(result.files["intent_ir"].exists())
@@ -19,6 +31,14 @@ class KernelTest(unittest.TestCase):
             self.assertTrue(result.files["organization_ir"].exists())
             self.assertTrue(result.files["artifact"].exists())
             self.assertTrue(result.files["evidence"].exists())
+            self.assertTrue(result.files["trace"].exists())
+            self.assertTrue(result.files["sandbox_state"].exists())
+            self.assertTrue(result.files["execution_graph"].exists())
+            sandbox = json.loads(result.files["sandbox_state"].read_text(encoding="utf-8"))
+            self.assertTrue(Path(sandbox["workspace_path"]).exists())
+            self.assertTrue((Path(sandbox["workspace_path"]) / "runtime-session.txt").exists())
+            self.assertTrue((Path(sandbox["artifacts_path"]) / "artifact.md").exists())
+            self.assertGreaterEqual(len(list(Path(sandbox["artifacts_path"]).glob("step-*.json"))), 1)
 
             task_ir = json.loads(result.files["task_ir"].read_text(encoding="utf-8"))
             self.assertEqual(task_ir["context"]["scope"], "generic")
