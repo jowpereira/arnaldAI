@@ -41,7 +41,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.12
 
 # 3. Clonar e criar venv
-cd /caminho/para/autoagent
+cd /caminho/para/arnaldAI
 uv venv --python 3.12
 uv sync --extra dev          # inclui pytest, ruff, mypy
 ```
@@ -258,7 +258,7 @@ livre (6)       Intervenção mínima. Requer --accept-terms.
 ### 4.1 Layout completo
 
 ```
-autoagent/
+arnaldAI/
 ├── runs/                            # output por execução (gitignored)
 │   └── run_<id>/
 │       ├── adaptive-plan.json        # plano adaptativo do turno
