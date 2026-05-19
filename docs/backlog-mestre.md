@@ -4,7 +4,11 @@
 > tudo que pode e deve ser feito no produto, marcando o que já existe,
 > o que está parcial e o que ainda falta.
 >
-> Data de referência: 2026-05-18.
+> Data de referência: 2026-05-19.
+>
+> Nota de escopo: este backlog é **intencionalmente mais enxuto** que
+> `README.md` e `docs/architecture.md`. Teoria e justificativa profunda ficam
+> nos documentos canônicos; aqui priorizamos rastreio tático de execução.
 
 ---
 
@@ -66,6 +70,9 @@ operações corporativas fora do repositório.
 - `[x]` Sincronização de capability do grafo sanitiza `module_path` nulo/`None`
 - `[x]` Governança hard-disabled no modo `graph` via policy permissiva explícita
 - `[x]` Bootstrap de contexto entre runs em modo grafo (`graph_context_bootstrapped`) a partir de memórias persistidas por sinapse
+- `[x]` `MemoryStore` evoluiu de JSONL simples para memória em dois planos: ledger append-only + `memory-graph.msgpack` com `MemoryNode`/`SynapseNode` materializados
+- `[x]` Rede de memória agora aprende associações recorrentes com política gulosa (score incremental), persistindo candidatos em `synapse-candidates.json` e materializando sinapses quando ultrapassam limiar
+- `[x]` Kernel passou a consolidar memória procedural por etapa executada (`step_results`), alimentando a rede de memórias/sinapses além da memória episódica de run
 - `[x]` Blackboard versionado com namespace de ação/capability (`StepContext.output_history` + `snapshot_related_outputs`) usado para composição contextual entre sinapses
 - `[x]` Agentes dinâmicos de tooling agora são escopados por capability (`toolsmith_<capability>` para forja/estabilização e `toolrunner_<capability>` para execução com `module_path`), com `workflow_composer` para composição de múltiplos fluxos de tooling
 - `[x]` Pós-sync do grafo agora aciona auto-forja de capabilities dinâmicas sem `module_path` e persiste o caminho do módulo de volta no `execution-graph`
@@ -87,6 +94,7 @@ operações corporativas fora do repositório.
 - `[x]` CLI em modo chat agora também imprime a resposta do agente (preview do `artifact.md`) no terminal, sem depender de abrir arquivo manualmente
 - `[x]` Workflow leve para saudações/conversa inicial: materialização dinâmica reduzida para 1 synapse (`draft_artifact`) no tier `fast`, com `max_tokens` e `timeout` curtos por step
 - `[x]` Turnos curtos de chat em CLI para análise/decisão (sem tooling dinâmico) agora usam workflow compacto de 1 synapse (`draft_artifact`) no tier `fast` para reduzir latência operacional em conversas interativas
+- `[x]` `GraphRefKind` agora cobre `FEDERATED` e `SNAPSHOT` com resolução lazy read-only por URI e bloqueio explícito de mutação no `CognitiveGraph` resolvido
 
 ### 2.2 O que ainda é gargalo
 

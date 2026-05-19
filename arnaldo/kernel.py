@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import json
 from typing import Any, Dict, Tuple
 import copy
 
@@ -204,7 +205,14 @@ class ArnaldoKernel:
                 ",".join(gap_report.warnings) or "gap_detected",
             )
 
-        self._remember(run_id, task.goal, files, session.id, adaptive_plan)
+        self._remember(
+            run_id,
+            task.goal,
+            files,
+            session.id,
+            adaptive_plan,
+            step_results=list(runtime_result.step_results),
+        )
         session = self.sessions.record_turn(
             session,
             user_message=request,
@@ -822,6 +830,8 @@ class ArnaldoKernel:
         files: Dict[str, Path],
         session_id: str,
         adaptive_plan: Any,
+        *,
+        step_results: list[Dict[str, Any]] | None = None,
     ) -> None:
         record = MemoryRecord(
             id=run_id,
@@ -842,6 +852,35 @@ class ArnaldoKernel:
                     payload={
                         "session_id": session_id,
                         "objectives": adaptive_plan.inferred_objectives,
+                    },
+                )
+            )
+        for step in step_results or []:
+            action = str(step.get("action", "")).strip()
+            step_id = str(step.get("step_id", "")).strip()
+            agent_id = str(step.get("agent_id", "")).strip()
+            capability_id = str(step.get("capability_id", "")).strip()
+            result = step.get("result")
+            result_summary = (
+                result
+                if isinstance(result, str)
+                else json.dumps(result, ensure_ascii=True)[:400]
+                if isinstance(result, dict)
+                else str(result)[:400]
+            )
+            self.memory.append(
+                MemoryRecord(
+                    id=new_id("memory"),
+                    kind="procedural",
+                    payload={
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "agent_id": agent_id,
+                        "action": action,
+                        "capability_id": capability_id,
+                        "summary": "%s::%s" % (action or "step", result_summary),
+                        "result": result if isinstance(result, dict) else {"value": result_summary},
                     },
                 )
             )

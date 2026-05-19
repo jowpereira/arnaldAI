@@ -3,7 +3,7 @@
 Cobre:
 
 * ``GraphRef`` — tipagem, validação, plasticidade da referência.
-* ``GraphRefKind`` — apenas OWNED/SHARED implementados na Fase 2.
+* ``GraphRefKind`` — OWNED/SHARED/FEDERATED/SNAPSHOT suportados.
 * ``GraphRegistry`` — registro, resolução lazy, refcount, ownership,
   detecção de ciclo, garbage collection.
 * ``CognitiveGraph.attach_subgraph`` — composição estrutural.
@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 from arnaldo.graph import (
-    CapabilityNode,
     CognitiveGraph,
     EdgeKind,
     GraphCycleError,
@@ -28,8 +27,6 @@ from arnaldo.graph import (
     GraphRefKind,
     GraphRegistry,
     MemoryNode,
-    SourceKind,
-    SourceRecord,
     SynapseNode,
 )
 
@@ -44,9 +41,9 @@ class TestGraphRefKind:
         assert GraphRefKind.OWNED.is_implemented
         assert GraphRefKind.SHARED.is_implemented
 
-    def test_federated_and_snapshot_not_yet(self) -> None:
-        assert not GraphRefKind.FEDERATED.is_implemented
-        assert not GraphRefKind.SNAPSHOT.is_implemented
+    def test_federated_and_snapshot_implemented(self) -> None:
+        assert GraphRefKind.FEDERATED.is_implemented
+        assert GraphRefKind.SNAPSHOT.is_implemented
 
     def test_snapshot_is_immutable(self) -> None:
         assert not GraphRefKind.SNAPSHOT.allows_mutation
@@ -73,13 +70,27 @@ class TestGraphRef:
                 ref_strength=1.5,
             )
 
-    def test_federated_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
+    def test_federated_requires_uri(self) -> None:
+        with pytest.raises(ValueError):
             GraphRef(graph_id="x", kind=GraphRefKind.FEDERATED)
 
-    def test_snapshot_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
+    def test_snapshot_requires_uri(self) -> None:
+        with pytest.raises(ValueError):
             GraphRef(graph_id="x", kind=GraphRefKind.SNAPSHOT)
+
+    def test_federated_and_snapshot_construction(self) -> None:
+        fed = GraphRef(
+            graph_id="fed_graph",
+            kind=GraphRefKind.FEDERATED,
+            uri="file:///tmp/fed.msgpack",
+        )
+        snap = GraphRef(
+            graph_id="snap_graph",
+            kind=GraphRefKind.SNAPSHOT,
+            uri="file:///tmp/snap.msgpack",
+        )
+        assert fed.kind == GraphRefKind.FEDERATED
+        assert snap.kind == GraphRefKind.SNAPSHOT
 
     def test_with_strength_is_immutable_update(self) -> None:
         ref = GraphRef(graph_id="x", kind=GraphRefKind.OWNED, ref_strength=0.5)
@@ -137,6 +148,42 @@ class TestGraphRegistry:
         reg = GraphRegistry()
         ref = GraphRef(graph_id="nonexistent", kind=GraphRefKind.OWNED)
         assert reg.resolve(ref) is None
+
+    def test_resolve_federated_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fed.msgpack"
+            sub = CognitiveGraph()
+            sub.add_node(MemoryNode.episodic("fed_mem", run_id="r1"))
+            sub.persist(path)
+            reg = GraphRegistry()
+            ref = GraphRef(
+                graph_id="fed_graph",
+                kind=GraphRefKind.FEDERATED,
+                uri=str(path),
+            )
+            resolved = reg.resolve(ref)
+            assert resolved is not None
+            assert resolved.is_read_only
+            with pytest.raises(RuntimeError):
+                resolved.add_node(MemoryNode.episodic("x", run_id="r2"))
+
+    def test_resolve_snapshot_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "snap.msgpack"
+            sub = CognitiveGraph()
+            sub.add_node(MemoryNode.episodic("snap_mem", run_id="r1"))
+            sub.persist(path)
+            reg = GraphRegistry()
+            ref = GraphRef(
+                graph_id="snap_graph",
+                kind=GraphRefKind.SNAPSHOT,
+                uri=str(path),
+            )
+            resolved = reg.resolve(ref)
+            assert resolved is not None
+            assert resolved.is_read_only
+            with pytest.raises(RuntimeError):
+                resolved.remove_node(next(iter([n.id for n in resolved.iter_nodes(active_only=False)])))
 
     def test_mark_owned_records_relationship(self) -> None:
         reg = GraphRegistry()
@@ -250,6 +297,28 @@ class TestAttachSubgraph:
             syn.id, sub, kind=GraphRefKind.OWNED, bridge_nodes=[m.id]
         )
         assert m.id in ref.bridge_nodes
+
+    def test_attach_snapshot_creates_read_only_subgraph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = CognitiveGraph(registry=GraphRegistry(base_path=Path(tmp)))
+            syn = SynapseNode.specialist("S", role="r", objective="o")
+            root.add_node(syn)
+            sub = CognitiveGraph()
+            sub.add_node(MemoryNode.episodic("inner", run_id="r1"))
+            ref = root.attach_subgraph(syn.id, sub, kind=GraphRefKind.SNAPSHOT)
+            resolved = root.resolve_subgraph(ref)
+            assert resolved is not None
+            assert resolved.is_read_only
+            with pytest.raises(RuntimeError):
+                resolved.add_node(MemoryNode.episodic("forbidden", run_id="r2"))
+
+    def test_attach_federated_requires_uri(self) -> None:
+        root = CognitiveGraph()
+        syn = SynapseNode.specialist("S", role="r", objective="o")
+        root.add_node(syn)
+        sub = CognitiveGraph()
+        with pytest.raises(ValueError):
+            root.attach_subgraph(syn.id, sub, kind=GraphRefKind.FEDERATED)
 
     def test_resolve_subgraph_returns_attached(self) -> None:
         root = CognitiveGraph()
@@ -519,7 +588,7 @@ class TestPersistenceWithRefs:
             root = CognitiveGraph()
             syn = SynapseNode.specialist("S", role="r", objective="o")
             root.add_node(syn)
-            ref = root.attach_subgraph(
+            root.attach_subgraph(
                 syn.id, sub, kind=GraphRefKind.SHARED, uri=sub_path
             )
             root_path = Path(tmp) / "root.msgpack"

@@ -1,3 +1,3 @@
-from .store import MemoryStore, MemoryRecord
+from .store import MemoryStore, MemoryRecord, MemorySynapseCandidate
 
-__all__ = ["MemoryStore", "MemoryRecord"]
+__all__ = ["MemoryStore", "MemoryRecord", "MemorySynapseCandidate"]

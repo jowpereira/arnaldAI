@@ -16,6 +16,10 @@ Este projeto segue:
 - Criação/reforço dinâmico de arestas `COLLABORATED_WITH` entre branches paralelos bem-sucedidos, materializando colaboração entre sinapses.
 - `MultiAgentRuntime` funcional com execução distribuída por ondas de agentes, paralelismo por família de ação e `agent_bus` com eventos de ciclo de vida.
 - Suíte `tests/test_multiagent_runtime.py` cobrindo paralelismo por onda, execução dinâmica de ferramenta por `module_path` e fallback de módulo ausente.
+- `MemoryStore` evoluiu para dois planos persistentes: ledger JSONL append-only e grafo cognitivo incremental (`memory-graph.msgpack`) com `MemoryNode`/`SynapseNode`.
+- Novo modelo `MemorySynapseCandidate` com persistência em `synapse-candidates.json`, priorização gulosa por coocorrência e API de feedback (`record_feedback`) para reforço online.
+- `GraphRefKind` agora suporta `FEDERATED` e `SNAPSHOT` com resolução lazy read-only por URI local (`file://` ou path).
+- Suíte `tests/test_memory_store.py` para cobrir materialização/atualização de sinapses de memória e persistência do estado do grafo.
 
 ### Changed
 - CLI simplificada para execução sempre em `graph` com modo real estrito por padrão (sem toggle por variável de ambiente para fallback).
@@ -23,6 +27,8 @@ Este projeto segue:
 - `IntentCompiler`, `GraphRuntime` e `ExecutionEngine` agora usam `strict_real=True` por padrão, exigindo LLM configurada no fluxo principal.
 - `GraphRuntime` agora materializa workflow leve para mensagens conversacionais de saudação (`open_ended_execution`) em 1 etapa (`draft_artifact`) com tier `fast`.
 - `ExecutionEngine` passou a aplicar hints por synapse (`max_tokens`, `timeout`, `temperature`, `max_retries`, `reasoning_effort/summary`) diretamente na chamada `chat_typed`.
+- `CognitiveGraph` passou a bloquear mutações quando carregado em modo read-only (refs `FEDERATED`/`SNAPSHOT`), impedindo `add/remove` e updates plásticos nesses subgrafos.
+- `GraphRuntime` passou a conectar memória por passo com arestas `TEMPORAL_BEFORE` e `SEMANTIC` por `capability_id`; `ArnaldoKernel` agora consolida memória procedural também por `step_results`.
 
 ## [0.2.0] - 2026-05-18
 ### Added

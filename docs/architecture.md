@@ -631,6 +631,56 @@ class HebbianRule:
         return clip(w + delta, floor, ceiling)
 ```
 
+### 9.6 Sinapse como serviço de kernel (refino 2026)
+
+Refino arquitetural: **sinapse não deve nascer como estrutura fixa no boot**.
+A criação upfront introduz vieses prematuros de topologia e congela hipóteses
+sem evidência operacional suficiente.
+
+No lugar disso, Arnaldo trata sinapse como **serviço inferencial do kernel**:
+
+1. todo evento de execução gera `SynapseCandidate`;
+2. candidatos são atualizados online por coativação + resultado;
+3. apenas candidatos com evidência forte viram arestas materializadas;
+4. arestas materializadas podem voltar a estado candidato (demotion).
+
+Score canônico de candidatura:
+
+```
+S(i,j) =
+    α · semantic_similarity(i,j)
+  + β · coactivation(i,j)
+  + γ · temporal_causality(i,j)
+  + δ · outcome_gain(i,j)
+  - ε · contradiction_risk(i,j)
+  - ζ · decay_penalty(i,j)
+```
+
+Materialização exige simultaneamente:
+
+```
+S(i,j) > τ_materialize
+support(i,j) ≥ n_min
+Δquality_window(i,j) > 0
+```
+
+Isso separa duas fases:
+
+- **hipótese** (candidato): explorável, barata, reversível;
+- **crença operacional** (aresta): persistida, usada no planner, sujeita a
+  plasticidade.
+
+### 9.7 Ceticismo explícito: hipóteses falsificáveis
+
+Sem falsificação, o grafo vira acumulador de correlações espúrias.
+Toda estratégia nova de memória/sinapse deve declarar hipótese nula:
+
+```
+H0: "a nova política não melhora sucesso/custo/latência vs baseline"
+```
+
+E precisa ser testada em replay + online canário antes de promoção global.
+
 ---
 
 ## 10. Decaimento adaptativo
@@ -1440,6 +1490,63 @@ def synthesize_activation(self, task, cognitive_graph):
 
     return ActivationPattern(synapses, memories, caps)
 ```
+
+### 14.4 Serviço de inferência sináptica no runtime
+
+`synthesize_activation` deixa de depender de catálogo estático de sinapses.
+O kernel passa a manter dois planos:
+
+- **write-path:** gera/atualiza `SynapseCandidate` por episódio;
+- **read-path:** consulta arestas materializadas + candidatos top-K.
+
+Pseudo-código:
+
+```python
+def update_synapse_service(episode):
+    for (u, v, signal) in episode.coactivations:
+        c = candidate_store.get_or_create(u, v)
+        c.score = update_score(c.score, signal, episode.outcome)
+        c.support += 1
+
+        if should_materialize(c):
+            graph.upsert_edge(u, v, kind="ACTIVATES", weight=c.score)
+        elif should_demote(c):
+            graph.demote_edge(u, v)
+```
+
+Benefício: aprendizado estrutural contínuo sem hardcode prematuro de topologia.
+
+### 14.5 Política de decisão: escada `greedy -> bandit -> RL`
+
+Greedy puro é útil como baseline, mas tende a convergir cedo demais em ambiente
+não estacionário. A política recomendada é progressiva:
+
+```text
+Nível 0 (cold-start): epsilon-greedy com exploração alta
+Nível 1 (dados médios): contextual bandit (LinUCB/Thompson)
+Nível 2 (dados longos): RL hierárquico para composição recursiva
+```
+
+Reward operacional unificado:
+
+```
+R = w1·success + w2·quality - w3·latency - w4·cost - w5·error_rate
+```
+
+Gates mínimos de promoção:
+
+1. Bandit só entra quando cada ação crítica tem suporte mínimo.
+2. RL só entra quando há episódios suficientes para crédito temporal estável.
+3. Qualquer nível novo precisa superar baseline em janela móvel definida.
+
+### 14.6 Critérios de rollback (anti-autoengano)
+
+Qualquer política adaptativa é revertida se:
+
+1. `success_rate` cair abaixo do baseline por janela consecutiva;
+2. custo subir sem ganho proporcional de qualidade;
+3. variância de decisão explodir (instabilidade online);
+4. crescimento do grafo acelerar sem ganho de retrieval.
 
 ---
 
@@ -2807,12 +2914,27 @@ estruturais (bool).
 
 - Sumers et al. (2024). *Cognitive Architectures for Language Agents.*
   arXiv:2309.02427.
+- Cemri et al. (2025). *Why Do Multi-Agent LLM Systems Fail?*
+  arXiv:2503.13657.
 - Rasmussen et al. (2025). *Zep: A Temporal Knowledge Graph Architecture
   for Agent Memory.* arXiv:2501.13956.
+- Chhikara et al. (2025). *Mem0: Building Production-Ready AI Agents with
+  Scalable Long-Term Memory.* arXiv:2504.19413.
+- Kang et al. (2025). *Memory OS of AI Agent.* arXiv:2506.06326.
+- Wu et al. (2025). *LongMemEval: Benchmarking Chat Assistants on Long-Term
+  Interactive Memory.* arXiv:2410.10813.
+- Wu et al. (2026). *LongMemEval-V2: Evaluating Long-Term Agent Memory Toward
+  Experienced Colleagues.* arXiv:2605.12493.
+- Hu et al. (2026). *Memory Matters More: Event-Centric Memory as a Logic
+  Map for Agent Searching and Reasoning.* arXiv:2601.04726.
 - Jiang et al. (2026). *MAGMA: A Multi-Graph based Agentic Memory
   Architecture.* arXiv:2601.03236.
-- Kim et al. (2024). *Not All Memories Age the Same: Autodiscovery of
+- Karhade (2026). *Not All Memories Age the Same: Autodiscovery of
   Adaptive Decay.* arXiv:2604.26970.
+- Poon et al. (2026). *Online Multi-LLM Selection via Contextual Bandits
+  under Unstructured Context Evolution.* AAAI-26.
+- Garivier & Moulines (2008/2011). *On Upper-Confidence Bound Policies for
+  Non-Stationary Bandit Problems.* arXiv:0805.3415.
 - Wang et al. (2024). *Mixture-of-Agents Enhances Large Language Model
   Capabilities.* arXiv:2406.04692.
 - Battaglia et al. (2018). *Relational inductive biases, deep learning,

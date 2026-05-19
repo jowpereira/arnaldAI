@@ -135,6 +135,9 @@ class CognitiveGraph:
         self.matcher: HybridMatcher = matcher or HybridMatcher()
         self._registry: GraphRegistry | None = registry
 
+        # Snapshots/Federated refs são resolvidos em read-only.
+        self._read_only: bool = False
+
         # Telemetria opcional (lista circular curta — produção plugar logger)
         self._events: list[GraphEvent] = []
 
@@ -157,6 +160,19 @@ class CognitiveGraph:
     def registry(self) -> GraphRegistry | None:
         return self._registry
 
+    @property
+    def is_read_only(self) -> bool:
+        return self._read_only
+
+    def _set_read_only(self, value: bool = True) -> None:
+        self._read_only = bool(value)
+
+    def _assert_mutable(self) -> None:
+        if self._read_only:
+            raise RuntimeError(
+                f"CognitiveGraph '{self._graph_id}' está em modo read-only."
+            )
+
     # ── Adição / remoção ─────────────────────────────────────────────────
 
     def add_node(self, node: GraphNode) -> GraphNode:
@@ -170,6 +186,7 @@ class CognitiveGraph:
         Raises:
             ValueError: se id contém caracteres inválidos.
         """
+        self._assert_mutable()
         if not node.id:
             raise ValueError("Node sem id não pode ser adicionado")
         # Remove de índices antigos se já existia
@@ -188,6 +205,7 @@ class CognitiveGraph:
             KeyError: se source ou target inexistentes.
             ValueError: se aresta viola invariantes.
         """
+        self._assert_mutable()
         if edge.source_id not in self._nodes:
             raise KeyError(f"source_id {edge.source_id} inexistente")
         if edge.target_id not in self._nodes:
@@ -212,6 +230,7 @@ class CognitiveGraph:
 
     def remove_node(self, node_id: str) -> None:
         """Remove nó e todas as arestas incidentes."""
+        self._assert_mutable()
         if node_id not in self._nodes:
             return
         # Remove arestas incidentes do dicionário local
@@ -328,6 +347,7 @@ class CognitiveGraph:
 
     def activate(self, node_id: str, *, at: datetime | None = None) -> None:
         """Registra ativação de um nó. Sem efeito se nó inexistente."""
+        self._assert_mutable()
         node = self._nodes.get(node_id)
         if node is None:
             return
@@ -336,6 +356,7 @@ class CognitiveGraph:
 
     def record_outcome(self, node_id: str, *, success: bool) -> None:
         """Aplica Hebbian update após resultado da ativação."""
+        self._assert_mutable()
         node = self._nodes.get(node_id)
         if node is None:
             return
@@ -347,6 +368,7 @@ class CognitiveGraph:
 
     def record_edge_outcome(self, edge_id: str, *, success: bool) -> None:
         """Hebbian update em arestas sinápticas (ACTIVATES, COLLAB, INHIBITS)."""
+        self._assert_mutable()
         edge = self._edges.get(edge_id)
         if edge is None:
             return
@@ -384,6 +406,7 @@ class CognitiveGraph:
             GraphCycleError: anexar criaria ciclo (via registry).
             RuntimeError: se nenhum ``GraphRegistry`` configurado.
         """
+        self._assert_mutable()
         node = self._nodes.get(node_id)
         if node is None:
             raise KeyError(f"node {node_id} não existe em {self.graph_id}")
@@ -399,8 +422,31 @@ class CognitiveGraph:
         if registry.get(self._graph_id) is None:
             registry.register(self, graph_id=self._graph_id)
 
+        if kind == GraphRefKind.FEDERATED and uri is None:
+            raise ValueError("GraphRefKind.FEDERATED exige uri.")
+
+        effective_uri = Path(uri) if uri is not None else None
+        target_subgraph = subgraph
+        target_graph_id = subgraph._graph_id
+
+        if kind == GraphRefKind.SNAPSHOT:
+            if effective_uri is None:
+                base_path = registry._base_path  # pylint: disable=protected-access
+                if base_path is None:
+                    raise ValueError(
+                        "GraphRefKind.SNAPSHOT exige uri ou GraphRegistry(base_path=...)."
+                    )
+                snapshot_dir = Path(base_path) / "snapshots"
+                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                snapshot_name = f"{subgraph.graph_id}_{utc_now().strftime('%Y%m%dT%H%M%S%f')}.msgpack"
+                effective_uri = snapshot_dir / snapshot_name
+            subgraph.persist(effective_uri)
+            target_subgraph = CognitiveGraph.load(effective_uri, registry=registry)
+            target_subgraph._set_read_only(True)
+            target_graph_id = _new_graph_id()
+
         # Registra sub-grafo (gera id se necessário)
-        sub_gid = registry.register(subgraph, graph_id=subgraph._graph_id, uri=uri)
+        sub_gid = registry.register(target_subgraph, graph_id=target_graph_id, uri=effective_uri)
 
         # Marca ownership/refcount
         if kind == GraphRefKind.OWNED:
@@ -415,7 +461,7 @@ class CognitiveGraph:
         ref = GraphRef(
             graph_id=sub_gid,
             kind=kind,
-            uri=str(uri) if uri else None,
+            uri=str(effective_uri) if effective_uri else None,
             bridge_nodes=tuple(bridge_nodes or []),
             ref_strength=ref_strength,
         )
@@ -440,6 +486,7 @@ class CognitiveGraph:
         Returns:
             ``True`` se a referência foi encontrada e removida.
         """
+        self._assert_mutable()
         node = self._nodes.get(node_id)
         if node is None:
             return False
@@ -507,6 +554,7 @@ class CognitiveGraph:
                     for n' ∈ scoped_activations[ref.graph_id]:
                         G'.record_outcome_recursive(n', s, depth+1)
         """
+        self._assert_mutable()
         self.record_outcome(node_id, success=success)
 
         if depth >= max_depth:
@@ -519,6 +567,9 @@ class CognitiveGraph:
         for ref in node.subgraph_refs:
             subgraph = self.resolve_subgraph(ref)
             if subgraph is None:
+                continue
+
+            if not ref.kind.allows_mutation:
                 continue
 
             # Sem trace de ativação, não desce (evita reforço espúrio)
@@ -599,6 +650,7 @@ class CognitiveGraph:
         observabilidade. Operação ``O(|V|)`` — chamada periodicamente
         (uma vez por run, scheduled job, etc).
         """
+        self._assert_mutable()
         now = at or utc_now()
         counters = {"to_stale": 0, "to_archived": 0, "to_consolidated": 0}
         for node_id, node in list(self._nodes.items()):

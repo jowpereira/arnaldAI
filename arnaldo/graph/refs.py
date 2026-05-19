@@ -45,9 +45,11 @@ Resolução é *lazy*: o sub-grafo só é carregado quando alguém o consulta
                  com outros nós)
 ```
 
-Apenas ``OWNED`` e ``SHARED`` são implementados na Fase 2. ``FEDERATED`` e
-``SNAPSHOT`` ficam para Fase 4 (precisam de protocolo A2A funcionando para
-``FEDERATED`` e versionamento de schema para ``SNAPSHOT``).
+Todos os modos estão disponíveis de forma pragmática:
+
+* ``OWNED`` / ``SHARED``: resolução local em memória/disco.
+* ``FEDERATED``: resolução read-only a partir de URI local (ex.: ``file://``).
+* ``SNAPSHOT``: resolução read-only de cópia persistida e imutável.
 """
 from __future__ import annotations
 
@@ -57,6 +59,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
+from urllib.parse import unquote, urlparse
 
 from .temporal import utc_now
 
@@ -91,22 +94,21 @@ class GraphRefKind(str, Enum):
     """Sub-grafo vive em servidor remoto (acessado via A2A/MCP).
 
     Apenas os ``bridge_nodes`` listados são acessíveis — o resto do grafo
-    permanece privado. **Não implementado na Fase 2** — requer protocolo A2A
-    funcional.
+    permanece privado. Nesta implementação, a resolução é pragmática via URI
+    local (``file://`` ou path), em modo read-only.
     """
 
     SNAPSHOT = "snapshot"
     """Cópia imutável e versionada do sub-grafo num instante t.
 
     Auditoria e reprodutibilidade: decisões antigas podem ser re-rodadas
-    exatamente. **Não implementado na Fase 2** — requer versionamento de
-    schema.
+    exatamente. Snapshot é resolvido em modo read-only.
     """
 
     @property
     def is_implemented(self) -> bool:
         """Indica se o tipo está suportado nesta fase do projeto."""
-        return self in {GraphRefKind.OWNED, GraphRefKind.SHARED}
+        return True
 
     @property
     def allows_mutation(self) -> bool:
@@ -154,11 +156,11 @@ class GraphRef:
             raise ValueError(
                 f"ref_strength deve ∈ [0,1], recebido {self.ref_strength}"
             )
-        if not self.kind.is_implemented:
-            raise NotImplementedError(
-                f"GraphRefKind.{self.kind.name} ainda não implementado nesta fase. "
-                f"Use {GraphRefKind.OWNED.name} ou {GraphRefKind.SHARED.name}."
-            )
+        if self.kind in {GraphRefKind.FEDERATED, GraphRefKind.SNAPSHOT}:
+            if not (self.uri and str(self.uri).strip()):
+                raise ValueError(
+                    f"GraphRefKind.{self.kind.name} exige uri para resolução lazy/read-only."
+                )
 
     def with_strength(self, new_strength: float) -> GraphRef:
         """Retorna nova GraphRef com strength clipado em [0,1]."""
@@ -202,7 +204,8 @@ class GraphRegistry:
 
     def __init__(self, *, base_path: Path | None = None) -> None:
         self._graphs: dict[str, CognitiveGraph] = {}
-        self._paths: dict[str, Path] = {}
+        self._paths: dict[str, str] = {}
+        self._readonly_cache: dict[str, CognitiveGraph] = {}
         # owner_key = f"{parent_graph_id}::{node_id}"  → child_graph_id
         self._owners: dict[str, str] = {}
         # Para SHARED: contagem de referências a cada graph_id
@@ -216,7 +219,7 @@ class GraphRegistry:
         graph: CognitiveGraph,
         *,
         graph_id: str | None = None,
-        uri: Path | None = None,
+        uri: Path | str | None = None,
     ) -> str:
         """Registra um grafo. Atribui ``graph_id`` se ausente.
 
@@ -233,7 +236,7 @@ class GraphRegistry:
         graph._bind_registry(self)
         self._graphs[gid] = graph
         if uri is not None:
-            self._paths[gid] = Path(uri)
+            self._paths[gid] = str(uri)
         self._refcounts.setdefault(gid, 0)
         return gid
 
@@ -241,6 +244,9 @@ class GraphRegistry:
         """Remove um grafo do registro (sem garantia de cleanup de filhos)."""
         self._graphs.pop(graph_id, None)
         self._paths.pop(graph_id, None)
+        for key in list(self._readonly_cache.keys()):
+            if key.split("::", 1)[0] == graph_id:
+                self._readonly_cache.pop(key, None)
         self._owners.pop(graph_id, None)
         self._refcounts.pop(graph_id, None)
 
@@ -254,8 +260,12 @@ class GraphRegistry:
         2. Se há ``uri``, carrega do disco e cacheia.
         3. Caso contrário, retorna ``None`` (referência morta).
         """
-        if ref.graph_id in self._graphs:
+        if ref.kind in {GraphRefKind.OWNED, GraphRefKind.SHARED} and ref.graph_id in self._graphs:
             return self._graphs[ref.graph_id]
+        readonly = ref.kind in {GraphRefKind.FEDERATED, GraphRefKind.SNAPSHOT}
+        readonly_key = f"{ref.graph_id}::{ref.kind.value}"
+        if readonly and readonly_key in self._readonly_cache:
+            return self._readonly_cache[readonly_key]
         # Lazy load
         from .store import CognitiveGraph  # import tardio para evitar ciclo
 
@@ -263,8 +273,15 @@ class GraphRegistry:
         if uri is None:
             return None
         try:
-            cog = CognitiveGraph.load(Path(uri), registry=self)
-            self._graphs[ref.graph_id] = cog
+            path = _uri_to_path(uri)
+            if path is None:
+                return None
+            cog = CognitiveGraph.load(path, registry=self)
+            if readonly:
+                cog._set_read_only(True)
+                self._readonly_cache[readonly_key] = cog
+            else:
+                self._graphs[ref.graph_id] = cog
             return cog
         except (FileNotFoundError, ValueError):
             return None
@@ -372,6 +389,7 @@ class GraphRegistry:
         return {
             "graphs_in_memory": len(self._graphs),
             "persisted_paths": len(self._paths),
+            "readonly_cached": len(self._readonly_cache),
             "owned_subgraphs": len(self._owners),
             "shared_active": sum(1 for c in self._refcounts.values() if c > 1),
         }
@@ -380,3 +398,28 @@ class GraphRegistry:
 def _new_graph_id() -> str:
     """Gera id único hexadecimal para um grafo."""
     return f"cog_{uuid.uuid4().hex}"
+
+
+def _uri_to_path(uri: str) -> Path | None:
+    """Converte URI/path em ``Path`` local, suportando ``file://``.
+
+    URIs HTTP(S) não são resolvidos nesta camada; retornam ``None`` para manter
+    a resolução federada explicitamente local/read-only por enquanto.
+    """
+    parsed = urlparse(uri)
+    scheme = parsed.scheme.lower()
+    # Windows absoluto ("C:\\path\\file") é parseado como scheme="c".
+    if len(scheme) == 1 and len(uri) >= 2 and uri[1] == ":":
+        return Path(uri)
+    if scheme in {"http", "https"}:
+        return None
+    if scheme == "file":
+        raw_path = unquote(parsed.path or "")
+        if len(raw_path) >= 3 and raw_path[0] == "/" and raw_path[2] == ":":
+            raw_path = raw_path[1:]
+        if not raw_path:
+            return None
+        return Path(raw_path)
+    if scheme == "":
+        return Path(uri)
+    return None

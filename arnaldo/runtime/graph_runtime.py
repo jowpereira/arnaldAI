@@ -5,7 +5,7 @@ import os
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from arnaldo.contracts import (
     EvidenceRecord,
@@ -270,6 +270,7 @@ class GraphRuntime(RuntimeAdapter):
                 )
 
         step_results: list[dict[str, Any]] = []
+        previous_memory_node_id: str | None = None
         for index, exec_result in enumerate(execution_results, start=1):
             item = step_by_node.get(exec_result.node_id)
             if item is None:
@@ -300,13 +301,16 @@ class GraphRuntime(RuntimeAdapter):
             if step_artifact:
                 step_result["sandbox_artifact"] = str(step_artifact)
             step_results.append(step_result)
-            self._record_step_memory(
+            current_memory_node_id = self._record_step_memory(
                 graph=graph,
                 run_id=run_id,
                 node_id=exec_result.node_id,
                 step_item=item,
                 result_payload=result_payload,
+                previous_memory_id=previous_memory_node_id,
             )
+            if current_memory_node_id:
+                previous_memory_node_id = current_memory_node_id
             self._evolve_capability_nodes(
                 graph=graph,
                 node_id=exec_result.node_id,
@@ -1624,7 +1628,8 @@ class GraphRuntime(RuntimeAdapter):
         node_id: str,
         step_item: Dict[str, Any],
         result_payload: Dict[str, Any],
-    ) -> None:
+        previous_memory_id: str | None = None,
+    ) -> str:
         memory_id = "mem_%s_%s" % (self._slug(run_id), self._slug(step_item["id"]))
         if graph.get_node(memory_id) is None:
             summary = self._result_summary(result_payload)
@@ -1644,6 +1649,7 @@ class GraphRuntime(RuntimeAdapter):
                 },
             )
             graph.add_node(memory)
+        capability_id = str(step_item.get("capability_id", "")).strip()
         self._ensure_edge(
             graph=graph,
             source_id=node_id,
@@ -1651,6 +1657,29 @@ class GraphRuntime(RuntimeAdapter):
             kind=EdgeKind.MENTIONS,
             weight=0.6,
         )
+        if previous_memory_id and previous_memory_id != memory_id and graph.get_node(previous_memory_id):
+            self._ensure_edge(
+                graph=graph,
+                source_id=previous_memory_id,
+                target_id=memory_id,
+                kind=EdgeKind.TEMPORAL_BEFORE,
+                weight=0.72,
+            )
+        if capability_id:
+            for candidate in graph.iter_nodes(kind=NodeKind.MEMORY, active_only=False):
+                if candidate.id == memory_id:
+                    continue
+                payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+                if str(payload.get("capability_id", "")).strip() != capability_id:
+                    continue
+                self._ensure_edge(
+                    graph=graph,
+                    source_id=candidate.id,
+                    target_id=memory_id,
+                    kind=EdgeKind.SEMANTIC,
+                    weight=0.58,
+                )
+        return memory_id
 
     def _ensure_branch(
         self,

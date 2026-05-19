@@ -8,7 +8,8 @@ Estrutura de grafo tipado, temporal, com plasticidade Hebbian, onde co-existem:
 
 Cada nó pode possuir/referenciar outros grafos via :class:`GraphRef`,
 formando uma hierarquia composicional. Modos suportados: ``OWNED`` (dono
-exclusivo) e ``SHARED`` (compartilhado).
+exclusivo), ``SHARED`` (compartilhado), ``FEDERATED`` (resolução read-only por
+URI) e ``SNAPSHOT`` (cópia imutável).
 
 As arestas são tipadas e ponderadas, sujeitas a plasticidade Hebbian em
 tipos sinápticos. Tudo descrito formalmente em ``docs/architecture.md``.

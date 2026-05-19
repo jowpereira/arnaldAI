@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.graph import CognitiveGraph, NodeKind
 from arnaldo.kernel import ArnaldoKernel
 from arnaldo.memory import MemoryStore
 from arnaldo.runtime import GraphRuntime, SandboxManager
@@ -49,6 +50,12 @@ class KernelTest(unittest.TestCase):
             self.assertEqual(task_ir["context"]["scope"], "generic")
             self.assertEqual(task_ir["goal"]["type"], "create_or_generate")
             self.assertNotIn("business" + "_research", json.dumps(task_ir))
+
+            memory_graph = base / "memory" / "memory-graph.msgpack"
+            self.assertTrue(memory_graph.exists())
+            graph = CognitiveGraph.load(memory_graph)
+            memories = list(graph.iter_nodes(kind=NodeKind.MEMORY, active_only=False))
+            self.assertGreaterEqual(len(memories), 1)
 
 
 if __name__ == "__main__":
