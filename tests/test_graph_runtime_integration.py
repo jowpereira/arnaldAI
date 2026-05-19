@@ -28,7 +28,7 @@ def build_payload_for_model(model: type[Any]) -> dict[str, Any]:
         elif field.name in {"evidence", "uncertainties", "warnings", "steps", "sections"}:
             payload[field.name] = []
         elif field.name == "constraints":
-            payload[field.name] = {}
+            payload[field.name] = []
         elif origin is list:
             payload[field.name] = []
         elif origin is dict:
@@ -89,14 +89,19 @@ class CaptureMessagesClient:
 
 class GraphRuntimeIntegrationTest(unittest.TestCase):
     def _build_kernel(self, base: Path, *, runtime=None) -> ArnaldoKernel:
-        return ArnaldoKernel(
-            runtime=runtime,
+        runtime_adapter = runtime or GraphRuntime(llm_client=AlwaysSuccessClient())
+        kernel = ArnaldoKernel(
+            runtime=runtime_adapter,
             memory=MemoryStore(base / "memory"),
             session_manager=SessionManager(base / "sessions"),
             tool_forge=ToolForge(base / "tool_forge"),
             capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
         )
+        llm_client = getattr(runtime_adapter, "llm_client", None)
+        if llm_client is not None:
+            kernel.intent_compiler._llm_client = llm_client  # type: ignore[attr-defined]
+        return kernel
 
     def test_default_runtime_mode_is_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,24 +118,78 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             marker_content = runtime_marker.read_text(encoding="utf-8")
             self.assertIn("runtime=graph", marker_content)
 
-    def test_graph_runtime_persists_llm_refusal_in_evidence(self) -> None:
+    def test_graph_runtime_raises_on_llm_refusal_in_strict_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             runtime = GraphRuntime(llm_client=RefusalClient())
             kernel = self._build_kernel(base, runtime=runtime)
-            result = kernel.run(
-                "Analise riscos de um plano sem executar nada externo",
-                output_dir=base / "runs",
-            )
+            with self.assertRaises(RuntimeError) as ctx:
+                kernel.run(
+                    "Analise riscos de um plano sem executar nada externo",
+                    output_dir=base / "runs",
+                )
+            self.assertIn("refusal", str(ctx.exception))
 
-            evidence_lines = [
-                json.loads(line)
-                for line in result.files["evidence"].read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            refusal_records = [r for r in evidence_lines if r.get("record_type") == "llm_refusal"]
-            self.assertGreaterEqual(len(refusal_records), 1)
-            self.assertEqual(refusal_records[0]["payload"]["reason"], "refusal_for_test")
+    def test_graph_runtime_materializes_lightweight_workflow_for_greeting(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="pipeline_with_critic",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "saudacao inicial do usuario para abrir conversa",
+                "type": "open_ended_execution",
+            },
+            capability_needs=[],
+            uncertainty=[],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertEqual(len(workflow), 1)
+        self.assertEqual(workflow[0]["action"], "draft_artifact")
+        self.assertEqual(workflow[0]["tier_preference"], "fast")
+        self.assertEqual(workflow[0]["max_tokens"], 320)
+
+    def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="minimal_pipeline",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "analisar acao do bradesco de forma objetiva",
+                "type": "analyze_or_evaluate",
+            },
+            context={
+                "source": "cli",
+                "original_request": "analise a acao bradesco",
+            },
+            capability_needs=[],
+            uncertainty=[],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertEqual(len(workflow), 1)
+        self.assertEqual(workflow[0]["action"], "draft_artifact")
+        self.assertEqual(workflow[0]["tier_preference"], "fast")
+        self.assertEqual(workflow[0]["max_tokens"], 700)
+        self.assertEqual(workflow[0]["timeout"], 45.0)
 
     def test_session_reuses_and_grows_execution_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -279,6 +338,35 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             payload = retention_events[-1]["payload"]
             self.assertIn("decay", payload)
             self.assertIn("removed_memory_nodes", payload)
+
+    def test_graph_runtime_persists_prompt_trace_for_synapses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            kernel = self._build_kernel(base)
+            result = kernel.run(
+                "Analise e sintetize um plano curto para validar prompt tracing",
+                output_dir=base / "runs",
+            )
+
+            self.assertIn("prompts", result.files)
+            prompt_lines = [
+                json.loads(line)
+                for line in result.files["prompts"].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertGreaterEqual(len(prompt_lines), 1)
+            first = prompt_lines[0]
+            self.assertIn("node_id", first)
+            self.assertIn("messages", first)
+            self.assertIn("chat_kwargs", first)
+
+            trace_lines = [
+                json.loads(line)
+                for line in result.files["trace"].read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            prompt_events = [item for item in trace_lines if item.get("event_type") == "prompt_prepared"]
+            self.assertGreaterEqual(len(prompt_events), 1)
 
     def test_graph_runtime_ignores_legacy_seed_synapses_outside_current_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

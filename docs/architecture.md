@@ -2653,7 +2653,7 @@ O. Hierarquia Composicional
 | `task_compiler.py`          | 96     | ⭐⭐⭐⭐ | ⭐⭐ | ⭐ | ⭐ |
 | `cognitive_control.py`      | 72     | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ | ⭐ |
 | `reality/gap.py`            | 29     | ⭐⭐⭐ | ⭐ | ⭐ | ⭐ |
-| `runtime/multiagent.py`     | 52     | ⭐⭐⭐ | ⭐ | ⭐ | ⭐ |
+| `runtime/multiagent.py`     | 323    | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
 | `memory/store.py`           | 38     | ⭐⭐ | ⭐⭐ | ⭐ | ⭐ |
 
 Legenda: ⭐ = fraco / ⭐⭐⭐⭐⭐ = excelente
@@ -2669,6 +2669,7 @@ Legenda: ⭐ = fraco / ⭐⭐⭐⭐⭐ = excelente
 - IntentCompiler com fallback heurístico
 - Sandbox provisionamento
 - Evidence ledger + trace
+- MultiAgentRuntime com execução por ondas de agentes e paralelismo por ação/capability
 
 **Stubs ou bugs conhecidos:**
 
@@ -2677,7 +2678,7 @@ Legenda: ⭐ = fraco / ⭐⭐⭐⭐⭐ = excelente
 | `derive_desired_state`        | Retorna `text[:180]` — sem transformação semântica   |
 | `execute_step`                | Dicts hardcoded idênticos para qualquer input        |
 | `render_artifact`             | Template Markdown fixo                               |
-| `MultiAgentRuntime.run`       | Chama LocalRuntime — zero LLM                        |
+| `MultiAgentRuntime.run`       | Sem provider LLM externo por agente (usa execução determinística + tooling local) |
 | `allowed=True` no PolicyEngine| Nunca bloqueia nada                                  |
 | `MemoryStore.load`            | Retorna tudo sem filtro                              |
 | `RealityGapDetector`          | Comparação de strings que reporta "ok" por acidente  |

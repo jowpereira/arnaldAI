@@ -21,6 +21,7 @@ class TaskCompiler:
             context={
                 "source": "cli",
                 "scope": "generic",
+                "original_request": intent.original_request,
             },
             constraints=intent.constraints,
             deliverables=build_deliverables(intent),

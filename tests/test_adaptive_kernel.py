@@ -6,19 +6,25 @@ import unittest
 from arnaldo.components import CapabilityRegistry, ToolForge
 from arnaldo.kernel import ArnaldoKernel
 from arnaldo.memory import MemoryStore
-from arnaldo.runtime import SandboxManager
+from arnaldo.runtime import GraphRuntime, SandboxManager
 from arnaldo.session import SessionManager
+from tests.support_llm import AlwaysSuccessTypedClient
 
 
 class AdaptiveKernelTest(unittest.TestCase):
     def _build_kernel(self, base: Path) -> ArnaldoKernel:
-        return ArnaldoKernel(
+        llm = AlwaysSuccessTypedClient()
+        runtime = GraphRuntime(llm_client=llm)
+        kernel = ArnaldoKernel(
+            runtime=runtime,
             memory=MemoryStore(base / "memory"),
             session_manager=SessionManager(base / "sessions"),
             tool_forge=ToolForge(base / "tool_forge"),
             capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
         )
+        kernel.intent_compiler._llm_client = llm  # type: ignore[attr-defined]
+        return kernel
 
     def test_graph_mode_disables_governance_policy_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

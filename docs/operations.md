@@ -201,9 +201,6 @@ envelope correto por `api_style`:
 # Run única
 uv run python -m arnaldo "Crie um plano para um SaaS B2B"
 
-# Forçar runtime específico (default atual: graph)
-uv run python -m arnaldo "Crie um plano para um SaaS B2B" --runtime-mode graph
-
 # Com nível de autonomia explícito
 uv run python -m arnaldo "Analise o mercado de clínicas" --autonomy autonomo
 
@@ -226,7 +223,13 @@ uv run python -m arnaldo "Planeje um MVP" --out ./meus_resultados
 | `--accept-terms`    | Eleva governance_profile para `self_managed` (menos checkpoints) |
 | `--chat`            | Loop interativo                                                  |
 | `--out <dir>`       | Diretório onde a run vai ser registrada (default: `runs/`)       |
-| `--runtime-mode`    | `graph` (default) / `local` / `multiagent`                       |
+
+Notas operacionais:
+- A CLI roda em `graph` por padrão e não expõe fallback local.
+- Execução é strict-real por natureza: sem `mock`, sem `fallback` e sem toggle por env.
+- Se LLM estiver indisponível/recusar/falhar, a run falha explicitamente com diagnóstico.
+- Cada run imprime resumo rico no terminal (topologia, contadores, evidências, trace e caminhos de artefatos).
+- Para mensagens de saudação/conversa inicial (`oi`, `olá`, etc.), o runtime materializa um workflow leve de 1 etapa no tier `fast` para reduzir latência.
 
 ### 3.3 Níveis de autonomia
 

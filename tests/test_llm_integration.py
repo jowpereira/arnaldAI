@@ -3,7 +3,7 @@
 Cobre:
 - Carregamento de config via .env
 - Roteamento task → tier
-- Fallback do IntentCompiler quando LLM falha
+- Comportamento estrito do IntentCompiler sem fallback por padrão
 - Validação de payload do LLM
 """
 from __future__ import annotations
@@ -188,17 +188,12 @@ class ClientNotConfiguredTest(unittest.TestCase):
         self.assertFalse(client.ping())
 
 
-class IntentCompilerLLMFallbackTest(unittest.TestCase):
-    def test_compiler_works_without_llm(self) -> None:
-        # Passa None explicitamente para forçar modo heurístico puro
+class IntentCompilerLLMStrictTest(unittest.TestCase):
+    def test_compiler_works_without_llm_raises_in_strict_mode(self) -> None:
         compiler = IntentCompiler(llm_client=False)  # type: ignore[arg-type]
-        # Sobrescreve _llm_client manualmente para garantir None
         compiler._llm_client = None
-
-        intent = compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")
-        self.assertEqual(intent.primary_goal, "create_or_generate")
-        self.assertTrue(intent.desired_state)
-        self.assertGreater(len(intent.inferred_requirements), 0)
+        with self.assertRaises(RuntimeError):
+            compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")
 
     def test_compiler_uses_llm_when_provided(self) -> None:
         fake = FakeLLMClient(
@@ -219,16 +214,11 @@ class IntentCompilerLLMFallbackTest(unittest.TestCase):
         self.assertIn("validar dor real", intent.inferred_requirements)
         self.assertEqual(len(fake.calls), 1)
 
-    def test_compiler_falls_back_when_llm_fails(self) -> None:
+    def test_compiler_fails_when_llm_fails_in_strict_mode(self) -> None:
         fake = FakeLLMClient(fail=True)
         compiler = IntentCompiler(llm_client=fake)
-
-        # Não deve lançar — fallback silencioso
-        intent = compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")
-
-        # Heurístico cobriu o gap
-        self.assertEqual(intent.primary_goal, "create_or_generate")
-        self.assertTrue(intent.desired_state)
+        with self.assertRaises(LLMError):
+            compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")
         self.assertEqual(len(fake.calls), 1)
 
     def test_compiler_rejects_invalid_primary_goal_from_llm(self) -> None:
@@ -249,13 +239,19 @@ class IntentCompilerLLMFallbackTest(unittest.TestCase):
         # desired_state válido foi aceito
         self.assertEqual(intent.desired_state, "estado X")
 
-    def test_compiler_falls_back_on_llm_refusal(self) -> None:
+    def test_compiler_fails_on_llm_refusal_in_strict_mode(self) -> None:
         fake = FakeLLMClient(refusal="safety refusal")
         compiler = IntentCompiler(llm_client=fake)
-        intent = compiler.compile("Crie um plano de marketing", autonomy="assistido")
-
-        self.assertEqual(intent.primary_goal, "create_or_generate")
+        with self.assertRaises(RuntimeError):
+            compiler.compile("Crie um plano de marketing", autonomy="assistido")
         self.assertEqual(len(fake.calls), 1)
+
+    def test_compiler_can_fallback_when_strict_disabled(self) -> None:
+        fake = FakeLLMClient(fail=True)
+        compiler = IntentCompiler(llm_client=fake, strict_real=False)
+        intent = compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")
+        self.assertEqual(intent.primary_goal, "create_or_generate")
+        self.assertTrue(intent.desired_state)
 
 
 class CodexTierTest(unittest.TestCase):
@@ -325,8 +321,12 @@ class CodexTierTest(unittest.TestCase):
         # Múltiplas mensagens → lista
         self.assertIsInstance(body["input"], list)
         self.assertEqual(len(body["input"]), 2)
+        self.assertEqual(body["input"][0]["type"], "message")
         self.assertEqual(body["input"][0]["role"], "system")
+        self.assertEqual(body["input"][0]["content"][0]["type"], "input_text")
+        self.assertEqual(body["input"][1]["type"], "message")
         self.assertEqual(body["input"][1]["role"], "user")
+        self.assertEqual(body["input"][1]["content"][0]["type"], "input_text")
 
     def test_codex_reasoning_effort_can_be_overridden(self) -> None:
         client = self._build_client_with_codex()

@@ -1,10 +1,8 @@
-"""IntentCompiler — heurístico com upgrade opcional via LLM.
+"""IntentCompiler — compilação de intenção com saída validada por LLM.
 
 Estratégia:
-- Sempre roda o pipeline heurístico (zero dep, determinístico, sem custo)
-- Se LLM client estiver configurado (.env presente), enriquece os campos
-  fracos (desired_state, signals, requirements, open_questions) com inferência
-- Se LLM falhar por qualquer razão, mantém o resultado heurístico
+- Em modo estrito (default), exige LLM configurado e falha sem fallback.
+- Em modo não estrito (uso de teste), preserva fallback heurístico local.
 """
 from __future__ import annotations
 
@@ -43,12 +41,13 @@ class IntentEnrichment:
 class IntentCompiler:
     """Converts a human request into a generic declarative contract.
 
-    Pode receber um LLM client opcional. Se ausente ou desconfigurado,
-    funciona em modo puramente heurístico (comportamento original).
+    `strict_real=True` por padrão para manter comportamento real sem fallback
+    no fluxo principal. Testes podem injetar `strict_real=False`.
     """
 
-    def __init__(self, llm_client: Optional[Any] = None) -> None:
+    def __init__(self, llm_client: Optional[Any] = None, strict_real: bool = True) -> None:
         self._llm_client = llm_client
+        self._strict_real = bool(strict_real)
         if llm_client is None and _LLM_AVAILABLE:
             # Auto-init: cria client a partir do .env se disponível
             try:
@@ -73,8 +72,16 @@ class IntentCompiler:
         primary_goal = derive_primary_goal(text)
 
         # === Camada LLM (opcional, enriquece se disponível) ===
+        if self._strict_real and not self.llm_enabled:
+            raise RuntimeError(
+                "strict_real habilitado: LLM indisponível no IntentCompiler (sem fallback heurístico)."
+            )
         if self.llm_enabled:
             enrichment = self._enrich_with_llm(text)
+            if self._strict_real and enrichment is None:
+                raise RuntimeError(
+                    "strict_real habilitado: enriquecimento LLM de intenção falhou."
+                )
             if enrichment is not None:
                 desired_state = enrichment.get("desired_state") or desired_state
                 primary_goal = enrichment.get("primary_goal") or primary_goal
@@ -107,8 +114,8 @@ class IntentCompiler:
     def _enrich_with_llm(self, request: str) -> Optional[Dict[str, Any]]:
         """Chama LLM tier=FAST para enriquecer a inferência.
 
-        Retorna dict com campos opcionais, ou None se LLM falhar.
-        Nunca lança — falha silenciosa é o fallback projetado.
+        Retorna dict com campos opcionais ou `None`.
+        Em modo estrito, erros/refusals propagam exceção.
         """
         if not _LLM_AVAILABLE or self._llm_client is None:
             return None
@@ -148,13 +155,19 @@ class IntentCompiler:
                 max_retries=2,
             )
         except (LLMError, RuntimeError, ValueError, TypeError) as exc:
+            if self._strict_real:
+                raise
             logger.warning("IntentCompiler LLM fallback: %s", exc)
             return None
 
         if result.refusal is not None:
+            if self._strict_real:
+                raise RuntimeError(f"IntentCompiler LLM refusal em strict_real: {result.refusal}")
             logger.warning("IntentCompiler LLM refusal: %s", result.refusal)
             return None
         if result.parsed is None:
+            if self._strict_real:
+                raise RuntimeError("IntentCompiler LLM retornou sem parsed em strict_real.")
             return None
 
         return self._validate_enrichment(asdict(result.parsed))

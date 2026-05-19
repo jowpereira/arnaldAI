@@ -91,7 +91,76 @@ def test_execute_synapse_success_updates_context_and_plasticity() -> None:
     assert len(client.calls) == 1
 
 
-def test_execute_synapse_refusal_records_negative_outcome() -> None:
+def test_execute_synapse_applies_step_level_llm_hints() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    tuned = synapse.with_payload_merge(
+        max_tokens=321,
+        timeout=7.5,
+        temperature=0.15,
+        max_retries=1,
+        reasoning_effort="low",
+    )
+    graph.add_node(tuned)
+    client = FakeTypedClient(responses=[_typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+
+    result = engine.execute_synapse(tuned.id, request="analise este plano", context=StepContext(), max_retries=2)
+
+    assert result.success is True
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["max_tokens"] == 321
+    assert kwargs["timeout"] == 7.5
+    assert kwargs["temperature"] == 0.15
+    assert kwargs["max_retries"] == 1
+    assert kwargs["reasoning_effort"] == "low"
+
+
+def test_execute_synapse_applies_runtime_defaults_for_timeout_tokens_and_effort() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    client = FakeTypedClient(responses=[_typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+
+    result = engine.execute_synapse(synapse.id, request="analise este plano", context=StepContext())
+
+    assert result.success is True
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["timeout"] == 240.0
+    assert kwargs["max_tokens"] == 1400
+    assert kwargs["reasoning_effort"] == "medium"
+
+
+def test_execute_synapse_emits_prompt_prepared_callback() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    client = FakeTypedClient(responses=[_typed_success()])
+    captured: list[dict[str, object]] = []
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+        on_prompt_prepared=lambda payload: captured.append(payload),
+    )
+
+    result = engine.execute_synapse(synapse.id, request="analise este plano", context=StepContext())
+
+    assert result.success is True
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["node_id"] == synapse.id
+    assert event["tier"] == "expert"
+    assert event["response_model"] == "SynapseOutput"
+    assert isinstance(event["messages"], list)
+    assert isinstance(event["chat_kwargs"], dict)
+
+
+def test_execute_synapse_refusal_raises_in_strict_mode() -> None:
     graph, synapse = _build_graph_with_synapse()
     client = FakeTypedClient(responses=[_typed_refusal("safety")])
     engine = ExecutionEngine(
@@ -101,10 +170,11 @@ def test_execute_synapse_refusal_records_negative_outcome() -> None:
     )
     ctx = StepContext()
 
-    result = engine.execute_synapse(synapse.id, request="acao proibida", context=ctx)
-
-    assert result.success is False
-    assert result.refusal == "safety"
+    try:
+        engine.execute_synapse(synapse.id, request="acao proibida", context=ctx)
+        assert False, "esperava RuntimeError em strict mode"
+    except RuntimeError as exc:
+        assert "refusal" in str(exc)
     assert len(ctx.refusals) == 1
     updated = graph.get_node(synapse.id)
     assert updated is not None
@@ -119,6 +189,7 @@ def test_execute_synapse_fallback_when_model_missing() -> None:
         graph=graph,
         llm_client=client,
         model_registry={},  # sem registro do SynapseOutput
+        strict_real=False,
     )
     ctx = StepContext()
 
@@ -143,6 +214,7 @@ def test_execute_synapse_records_error_when_llm_raises() -> None:
         graph=graph,
         llm_client=client,
         model_registry={"SynapseOutput": SynapseOutput},
+        strict_real=False,
     )
     ctx = StepContext()
 
@@ -240,6 +312,7 @@ def test_execute_activates_chain_runs_planned_path() -> None:
         graph=graph,
         llm_client=client,
         model_registry={"SynapseOutput": SynapseOutput},
+        strict_real=False,
     )
     path, ctx, results = engine.execute_activates_chain(first.id, request="execute cadeia")
 
@@ -249,6 +322,76 @@ def test_execute_activates_chain_runs_planned_path() -> None:
     assert first.id in ctx.outputs
     assert second.id in ctx.outputs
     assert len(client.calls) == 2
+
+
+def test_execute_activates_chain_updates_activates_edge_after_success() -> None:
+    graph = CognitiveGraph()
+    first = SynapseNode.specialist(
+        "First",
+        role="framer",
+        objective="o1",
+        output_contract_model=SynapseOutput,
+    )
+    second = SynapseNode.specialist(
+        "Second",
+        role="critic",
+        objective="o2",
+        output_contract_model=SynapseOutput,
+    )
+    graph.add_node(first)
+    graph.add_node(second)
+    edge = GraphEdge.connect(first.id, second.id, EdgeKind.ACTIVATES, weight=0.30)
+    graph.add_edge(edge)
+
+    client = FakeTypedClient(responses=[_typed_success(), _typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+        strict_real=False,
+    )
+    engine.execute_activates_chain(first.id, request="execute cadeia com reforco")
+
+    updated_edge = graph.get_edge(edge.id)
+    assert updated_edge is not None
+    assert updated_edge.successes == 1
+    assert updated_edge.failures == 0
+    assert updated_edge.weight > 0.30
+
+
+def test_execute_activates_chain_penalizes_activates_edge_on_failure() -> None:
+    graph = CognitiveGraph()
+    first = SynapseNode.specialist(
+        "First",
+        role="framer",
+        objective="o1",
+        output_contract_model=SynapseOutput,
+    )
+    second = SynapseNode.specialist(
+        "Second",
+        role="critic",
+        objective="o2",
+        output_contract_model=SynapseOutput,
+    )
+    graph.add_node(first)
+    graph.add_node(second)
+    edge = GraphEdge.connect(first.id, second.id, EdgeKind.ACTIVATES, weight=0.60)
+    graph.add_edge(edge)
+
+    client = FakeTypedClient(responses=[_typed_success(), _typed_refusal("blocked")])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+        strict_real=False,
+    )
+    engine.execute_activates_chain(first.id, request="execute cadeia com falha")
+
+    updated_edge = graph.get_edge(edge.id)
+    assert updated_edge is not None
+    assert updated_edge.successes == 0
+    assert updated_edge.failures == 1
+    assert updated_edge.weight < 0.60
 
 
 def test_plan_and_execute_activates_reachable_covers_branches() -> None:
@@ -296,6 +439,55 @@ def test_plan_and_execute_activates_reachable_covers_branches() -> None:
     _, _, results = engine.execute_activates_reachable(root.id, request="execute grafo")
     assert len(results) == 4
     assert all(r.success for r in results)
+
+
+def test_execute_activates_parallel_records_collaboration_edges_for_successful_branches() -> None:
+    graph = CognitiveGraph()
+    root = SynapseNode.specialist(
+        "Root",
+        role="framer",
+        objective="root",
+        output_contract_model=SynapseOutput,
+    )
+    left = SynapseNode.specialist(
+        "Left",
+        role="explorer",
+        objective="left",
+        output_contract_model=SynapseOutput,
+    )
+    right = SynapseNode.specialist(
+        "Right",
+        role="explorer",
+        objective="right",
+        output_contract_model=SynapseOutput,
+    )
+    for node in (root, left, right):
+        graph.add_node(node)
+    graph.add_edge(GraphEdge.connect(root.id, left.id, EdgeKind.ACTIVATES, weight=0.9))
+    graph.add_edge(GraphEdge.connect(root.id, right.id, EdgeKind.ACTIVATES, weight=0.85))
+
+    client = FakeTypedClient(responses=[_typed_success(), _typed_success(), _typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+    _, _, results = engine.execute_activates_parallel(root.id, request="execute paralelo")
+
+    assert len(results) == 3
+    forward = None
+    backward = None
+    for edge in graph.iter_edges_from(left.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False):
+        if edge.target_id == right.id:
+            forward = edge
+    for edge in graph.iter_edges_from(right.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False):
+        if edge.target_id == left.id:
+            backward = edge
+
+    assert forward is not None
+    assert backward is not None
+    assert forward.successes == 1
+    assert backward.successes == 1
 
 
 def test_execute_synapse_tooling_runs_dynamic_module_without_llm() -> None:
@@ -394,7 +586,7 @@ def test_execute_synapse_tooling_fails_when_module_missing() -> None:
         module_path="C:/nao/existe/connector.py",
     )
     graph.add_node(synapse)
-    engine = ExecutionEngine(graph=graph)
+    engine = ExecutionEngine(graph=graph, strict_real=False)
     ctx = StepContext()
 
     result = engine.execute_synapse(synapse.id, request="executar ferramenta", context=ctx)

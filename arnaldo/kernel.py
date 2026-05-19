@@ -134,6 +134,9 @@ class ArnaldoKernel:
         files["artifact"] = runtime_result.artifact_path
         files["trace"] = store.path("trace.jsonl")
         files["evidence"] = store.path("evidence.jsonl")
+        prompts = store.path("prompts.jsonl")
+        if prompts.exists():
+            files["prompts"] = prompts
         graph_workflow = store.path("graph-workflow-materialized.json")
         if graph_workflow.exists():
             files["graph_workflow_materialized"] = graph_workflow

@@ -73,9 +73,20 @@ operações corporativas fora do repositório.
 - `[x]` Runtime injeta automaticamente `compose_tooling` quando há múltiplas capabilities de tooling no mesmo workflow, permitindo composição dinâmica entre fluxos
 - `[x]` `execute_tooling` recebe snapshot contextual enriquecido (outputs recentes, tool outputs, contexto relacionado e versão) para execução dinâmica orientada por histórico
 - `[x]` Arestas `ACTIVATES` de tooling agora evitam encadeamento cruzado entre capabilities distintas e fazem pareamento por `capability_id` para estabilização/execução paralela
+- `[x]` Execução em `ACTIVATES` agora reforça/degrada peso das arestas conforme outcome real do synapse alvo, mantendo plasticidade explícita da rede de conexões
+- `[x]` Execução paralela agora cria/reforça arestas `COLLABORATED_WITH` entre branches bem-sucedidos no mesmo nível, materializando colaboração dinâmica entre agentes/sinapses
 - `[x]` Sync kernel<-grafo agora persiste sinais de execução real (`real_execution_successes`, `last_tool_execution_status`) no `CapabilityRegistry` para continuidade entre runs
 - `[x]` `execute_tooling` agora afeta maturidade da capability nos dois sentidos: reforça com sucesso real e penaliza com demotion quando `status` é não real (`not_implemented/failed/error/fallback`)
 - `[x]` ToolForge passou a validar scaffolds de forma funcional (`py_compile` + `run(payload)`), reduzindo risco de módulo inválido já no nascimento
+- `[~]` `MultiAgentRuntime` deixou de ser placeholder e passou a executar workflow por ondas de agentes (com paralelismo por ação/capability, `agent_bus` preenchido e suporte a `execute_tooling` por `module_path`)
+- `[x]` Modo strict-real agora é padrão por natureza no pipeline de grafo (sem toggle por env/flag), com falha explícita quando LLM está indisponível/recusa/falha
+- `[x]` ExecutionEngine agora aplica defaults operacionais por step/tier para chamadas LLM (`timeout`, `max_tokens`, `reasoning_effort`) quando o workflow não define esses campos, reduzindo timeout em fluxo pesado
+- `[x]` CLI reformulada para relatório operacional rico por run (topologia, execução, contadores de evidência/trace/capabilities e inventário completo de artefatos)
+- `[x]` CLI agora faz streaming ao vivo durante execução (tail de `trace.jsonl`, `evidence.jsonl` e `agent_bus.jsonl`), exibindo progresso em tempo real sem esperar o fim da run
+- `[x]` Runtime agora persiste `prompts.jsonl` por run com prompts reais por synapse (`messages` + `chat_kwargs`) e o CLI exibe esse stream em tempo real (`[prompt]`)
+- `[x]` CLI em modo chat agora também imprime a resposta do agente (preview do `artifact.md`) no terminal, sem depender de abrir arquivo manualmente
+- `[x]` Workflow leve para saudações/conversa inicial: materialização dinâmica reduzida para 1 synapse (`draft_artifact`) no tier `fast`, com `max_tokens` e `timeout` curtos por step
+- `[x]` Turnos curtos de chat em CLI para análise/decisão (sem tooling dinâmico) agora usam workflow compacto de 1 synapse (`draft_artifact`) no tier `fast` para reduzir latência operacional em conversas interativas
 
 ### 2.2 O que ainda é gargalo
 
@@ -215,8 +226,8 @@ operações corporativas fora do repositório.
 
 ### GRAFO-004 — Plasticidade Hebb-Stent (nós e arestas)
 - Status: `[x]`
-- Evidência: `plasticity.py`, `store.py::record_outcome`, `graph_runtime.py::_evolve_capability_nodes`
-- Lacuna: falta estender feedback para mais tipos de aresta além de `FORGED_BY`
+- Evidência: `plasticity.py`, `store.py::{record_outcome,record_edge_outcome}`, `graph_runtime.py::_evolve_capability_nodes`, `graph/execution.py::{_record_path_transition_outcomes,_record_reachable_transition_outcomes,_record_level_transition_outcomes,_record_collaboration_edges}`
+- Lacuna: feedback explícito ainda prioriza `ACTIVATES`/`COLLABORATED_WITH`; `INHIBITS` continua sem estratégia operacional dedicada
 - Critério de aceite: feedback de execução muda pesos de forma auditável
 
 ### GRAFO-005 — Decay adaptativo por domínio
@@ -268,9 +279,9 @@ operações corporativas fora do repositório.
 
 ### RT-002 — MultiAgentRuntime placeholder
 - Status: `[~]`
-- Evidência: `arnaldo/runtime/multiagent.py`
-- Lacuna: ainda delega comportamento local simplificado
-- Critério de aceite: provider real com execução por agente
+- Evidência: `arnaldo/runtime/multiagent.py` (orquestração por ondas, paralelismo com `ThreadPoolExecutor`, `agent_bus` com eventos start/completed e execução funcional de `execute_tooling` via `module_path`); cobertura em `tests/test_multiagent_runtime.py`
+- Lacuna: ainda falta integrar provider LLM externo por agente (hoje usa execução determinística + módulos dinâmicos locais)
+- Critério de aceite: execução distribuída por agente com rastreabilidade no bus e integração opcional com provider externo
 
 ### RT-003 — Engine de execução de `SynapseNode` tipado
 - Status: `[x]`
@@ -288,7 +299,7 @@ operações corporativas fora do repositório.
 
 ### RT-005 — Execução sequencial por arestas `ACTIVATES`
 - Status: `[x]`
-- Evidência: `ExecutionEngine.execute_activates_parallel/execute_activates_reachable` com `allowed_node_ids`; `GraphRuntime` restringe execução ao conjunto materializado de `step_by_node`; conectividade dinâmica `ACTIVATES` usa pareamento por `capability_id` para tooling, evita arestas sequenciais cruzadas entre capabilities distintas e conecta `compose_tooling` como estágio de composição quando múltiplos fluxos estão ativos; cobertura em `tests/test_graph_runtime_integration.py::test_graph_runtime_ignores_legacy_seed_synapses_outside_current_workflow` e `tests/test_dynamic_features.py::test_graph_runtime_pairs_dynamic_branches_by_capability`
+- Evidência: `ExecutionEngine.execute_activates_parallel/execute_activates_reachable` com `allowed_node_ids`; `ExecutionEngine` aplica feedback Hebb em arestas `ACTIVATES` por transição executada e cria/reforça `COLLABORATED_WITH` entre branches paralelos bem-sucedidos; `GraphRuntime` restringe execução ao conjunto materializado de `step_by_node`; conectividade dinâmica `ACTIVATES` usa pareamento por `capability_id` para tooling, evita arestas sequenciais cruzadas entre capabilities distintas e conecta `compose_tooling` como estágio de composição quando múltiplos fluxos estão ativos; cobertura em `tests/test_graph_runtime_integration.py::test_graph_runtime_ignores_legacy_seed_synapses_outside_current_workflow`, `tests/test_dynamic_features.py::test_graph_runtime_pairs_dynamic_branches_by_capability` e `tests/test_graph_execution.py::{test_execute_activates_chain_updates_activates_edge_after_success,test_execute_activates_chain_penalizes_activates_edge_on_failure,test_execute_activates_parallel_records_collaboration_edges_for_successful_branches}`
 - Lacuna: falta scheduler distribuído para alto volume; concorrência atual é local por threadpool
 - Critério de aceite: engine executa sequência validada, com proteção de ciclo, paralelismo por níveis e isolamento contra nós legados
 - Dependências: RT-003, RT-004
@@ -330,7 +341,7 @@ operações corporativas fora do repositório.
 
 ### RT-008 — Integração kernel -> graph runtime
 - Status: `[x]`
-- Evidência: `ArnaldoKernel._build_runtime()` com default `graph`; CLI com `--runtime-mode graph`; artefato do run expõe `graph_workflow_materialized`; cobertura em `tests/test_graph_runtime_integration.py`
+- Evidência: `ArnaldoKernel._build_runtime()` com default `graph`; CLI fixa execução em `graph`; artefato do run expõe `graph_workflow_materialized`; cobertura em `tests/test_graph_runtime_integration.py`
 - Lacuna: nenhuma crítica para o objetivo atual (runtime funcional em grafo)
 - Critério de aceite: runtime de grafo executável por default
 - Dependências: RT-003/004/005
@@ -505,7 +516,7 @@ operações corporativas fora do repositório.
 
 ### QA-007 — Testes de funcionalidades dinâmicas (agentes/ferramentas/sinapses)
 - Status: `[x]`
-- Evidência: `tests/test_dynamic_features.py`
+- Evidência: `tests/test_dynamic_features.py`, `tests/test_multiagent_runtime.py`
 - Lacuna: ampliar cobertura para grafos muito grandes (>10^4 nós)
 - Critério de aceite: criação dinâmica de agentes, tool forge sem termos e enriquecimento do grafo validados
 

@@ -299,7 +299,7 @@ class AzureOpenAIClient:
                 self.chat(
                     tier=tier,
                     messages=[{"role": "user", "content": "ping"}],
-                    max_tokens=4,
+                    max_tokens=16,
                     temperature=0.0,
                     timeout=15.0,
                 )
@@ -422,8 +422,7 @@ class AzureOpenAIClient:
 
         - Lista vazia → string vazia
         - 1 mensagem de user → string (formato mais simples)
-        - Múltiplas mensagens → lista preservando role/content
-        - Mensagens system → concatenadas como instructions no topo
+        - Múltiplas mensagens → itens tipados `{"type":"message",...}`
         """
         if not messages:
             return ""
@@ -432,13 +431,30 @@ class AzureOpenAIClient:
         if len(messages) == 1 and messages[0].get("role") == "user":
             return messages[0].get("content", "")
 
-        # Caso geral: converte para formato de input items
-        # Responses API aceita lista de {role, content} similar a chat
+        # Caso geral: converte para input items tipados.
+        # Azure Responses API em /openai/v1 exige `type` explícito.
         items = []
         for msg in messages:
-            role = msg.get("role", "user")
+            role = str(msg.get("role", "user")).strip() or "user"
+            if role not in {"system", "developer", "user", "assistant"}:
+                role = "user"
             content = msg.get("content", "")
-            items.append({"role": role, "content": content})
+            if isinstance(content, list):
+                text = "\n".join(str(part) for part in content if str(part).strip())
+            else:
+                text = str(content)
+            items.append(
+                {
+                    "type": "message",
+                    "role": role,
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": text,
+                        }
+                    ],
+                }
+            )
         return items
 
     def _send_request(
