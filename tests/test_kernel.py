@@ -56,6 +56,10 @@ class KernelTest(unittest.TestCase):
             graph = CognitiveGraph.load(memory_graph)
             memories = list(graph.iter_nodes(kind=NodeKind.MEMORY, active_only=False))
             self.assertGreaterEqual(len(memories), 1)
+            self.assertIn("memory_hints", result.files)
+            memory_hints = json.loads(result.files["memory_hints"].read_text(encoding="utf-8"))
+            self.assertIn("preferred_actions", memory_hints)
+            self.assertIn("transitions", memory_hints)
 
 
 if __name__ == "__main__":

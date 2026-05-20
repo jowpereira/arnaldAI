@@ -72,6 +72,9 @@ operações corporativas fora do repositório.
 - `[x]` Bootstrap de contexto entre runs em modo grafo (`graph_context_bootstrapped`) a partir de memórias persistidas por sinapse
 - `[x]` `MemoryStore` evoluiu de JSONL simples para memória em dois planos: ledger append-only + `memory-graph.msgpack` com `MemoryNode`/`SynapseNode` materializados
 - `[x]` Rede de memória agora aprende associações recorrentes com política gulosa (score incremental), persistindo candidatos em `synapse-candidates.json` e materializando sinapses quando ultrapassam limiar
+- `[x]` Candidatos de sinapse de memória agora acumulam suporte por assinatura estável (`record_kind+action+capability+agent`) entre runs, evitando fragmentação por IDs efêmeros de memória e permitindo materialização real de sinapses recorrentes
+- `[x]` Kernel agora gera `memory-hints.json` por run (ações preferidas + transições históricas), e o `GraphRuntime` usa essas dicas para reforçar conexões `ACTIVATES` dinamicamente
+- `[x]` Runtime materializa sinapse orquestrador por workflow (`workflow_orchestrator`) com sub-grafo OWNED de steps, fechando workflow como objeto de primeira classe no grafo
 - `[x]` Kernel passou a consolidar memória procedural por etapa executada (`step_results`), alimentando a rede de memórias/sinapses além da memória episódica de run
 - `[x]` Blackboard versionado com namespace de ação/capability (`StepContext.output_history` + `snapshot_related_outputs`) usado para composição contextual entre sinapses
 - `[x]` Agentes dinâmicos de tooling agora são escopados por capability (`toolsmith_<capability>` para forja/estabilização e `toolrunner_<capability>` para execução com `module_path`), com `workflow_composer` para composição de múltiplos fluxos de tooling
@@ -86,7 +89,7 @@ operações corporativas fora do repositório.
 - `[x]` `execute_tooling` agora afeta maturidade da capability nos dois sentidos: reforça com sucesso real e penaliza com demotion quando `status` é não real (`not_implemented/failed/error/fallback`)
 - `[x]` ToolForge passou a validar scaffolds de forma funcional (`py_compile` + `run(payload)`), reduzindo risco de módulo inválido já no nascimento
 - `[~]` `MultiAgentRuntime` deixou de ser placeholder e passou a executar workflow por ondas de agentes (com paralelismo por ação/capability, `agent_bus` preenchido e suporte a `execute_tooling` por `module_path`)
-- `[x]` Modo strict-real agora é padrão por natureza no pipeline de grafo (sem toggle por env/flag), com falha explícita quando LLM está indisponível/recusa/falha
+- `[x]` Modo strict-real permanece obrigatório no pipeline de grafo (CLI/runtime sem opção de fallback)
 - `[x]` ExecutionEngine agora aplica defaults operacionais por step/tier para chamadas LLM (`timeout`, `max_tokens`, `reasoning_effort`) quando o workflow não define esses campos, reduzindo timeout em fluxo pesado
 - `[x]` CLI reformulada para relatório operacional rico por run (topologia, execução, contadores de evidência/trace/capabilities e inventário completo de artefatos)
 - `[x]` CLI agora faz streaming ao vivo durante execução (tail de `trace.jsonl`, `evidence.jsonl` e `agent_bus.jsonl`), exibindo progresso em tempo real sem esperar o fim da run
@@ -94,6 +97,7 @@ operações corporativas fora do repositório.
 - `[x]` CLI em modo chat agora também imprime a resposta do agente (preview do `artifact.md`) no terminal, sem depender de abrir arquivo manualmente
 - `[x]` Workflow leve para saudações/conversa inicial: materialização dinâmica reduzida para 1 synapse (`draft_artifact`) no tier `fast`, com `max_tokens` e `timeout` curtos por step
 - `[x]` Turnos curtos de chat em CLI para análise/decisão (sem tooling dinâmico) agora usam workflow compacto de 1 synapse (`draft_artifact`) no tier `fast` para reduzir latência operacional em conversas interativas
+- `[x]` Correção do detector lexical de saudação no runtime (`\b` em regex de prefixo) para garantir que entradas como `oi ...` acionem workflow leve e não pipeline longo com `critic_review`
 - `[x]` `GraphRefKind` agora cobre `FEDERATED` e `SNAPSHOT` com resolução lazy read-only por URI e bloqueio explícito de mutação no `CognitiveGraph` resolvido
 
 ### 2.2 O que ainda é gargalo
@@ -253,8 +257,14 @@ operações corporativas fora do repositório.
 ### GRAFO-007 — Hierarquia de grafos (`GraphRef`)
 - Status: `[x]`
 - Evidência: `refs.py`, `store.py::attach_subgraph/resolve_subgraph`
-- Lacuna: modo federado/snapshot ainda pendente
-- Critério de aceite: OWNED/SHARED funcionando com prevenção de ciclos
+- Lacuna: federação remota HTTP/A2A ainda não implementada (atual: resolução local read-only por URI)
+- Critério de aceite: OWNED/SHARED/FEDERATED/SNAPSHOT com prevenção de ciclos e imutabilidade em snapshot
+
+### GRAFO-010 — Workflow como synapse orquestrador com sub-grafo
+- Status: `[x]`
+- Evidência: `graph/workflows.py::{make_workflow,compose_workflows}` + `graph_runtime.py::_materialize_runtime_workflow_orchestrator`
+- Lacuna: edição visual/manual de workflows ainda ausente
+- Critério de aceite: workflow materializado como nó orquestrador com subgrafo OWNED e composição workflow-of-workflows
 
 ### GRAFO-008 — `SynapseNode` com contratos explícitos no payload
 - Status: `[x]`

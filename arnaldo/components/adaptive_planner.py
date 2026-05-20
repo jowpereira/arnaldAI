@@ -89,9 +89,6 @@ def infer_objectives(text: str) -> List[str]:
             candidate = match.group(1).strip(" .")
             if candidate:
                 objectives.append(candidate[:180])
-
-    if not objectives:
-        objectives.append(text[:180])
     return dedupe(objectives)
 
 
@@ -107,7 +104,30 @@ def infer_learning_updates(text: str) -> Dict[str, Any]:
         preference["depth"] = "deep"
     if any(term in lowered for term in ["rapido", "agil", "urgente"]):
         preference["depth"] = "shallow"
+    user_name = infer_user_name(text)
+    if user_name:
+        preference["user_name"] = user_name
     return preference
+
+
+def infer_user_name(text: str) -> str:
+    normalized = normalize_request(text)
+    lowered = normalized.lower()
+    patterns = [
+        r"\bmeu nome\s+(?:e|é)\s+([a-zA-Z][a-zA-Z0-9_'-]{0,40})",
+        r"\bme chama de\s+([a-zA-Z][a-zA-Z0-9_'-]{0,40})",
+        r"\bpode me chamar de\s+([a-zA-Z][a-zA-Z0-9_'-]{0,40})",
+        r"^\s*([a-zA-Z][a-zA-Z0-9_'-]{0,40})\s*,?\s*me\s+chama\s+assim\b",
+        r"^\s*([a-zA-Z][a-zA-Z0-9_'-]{0,40})\s*,?\s*pode\s+me\s+chamar\s+assim\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered, flags=re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1).strip(" .,!?:;\"'()[]{}")
+        if raw:
+            return raw[:1].upper() + raw[1:]
+    return ""
 
 
 def infer_capability_hints(text: str) -> List[Dict[str, Any]]:
@@ -164,7 +184,7 @@ def compose_turn_request(text: str, session: SessionState, inferred_objectives: 
         context.append("contexto_objetivos_ativos: " + " | ".join(active[:3]))
     if inferred_objectives:
         context.append("objetivos_extraidos_no_turno: " + " | ".join(inferred_objectives[:3]))
-    if session.turns > 0:
+    if session.turns > 0 and (active or inferred_objectives):
         context.append("continuidade_sessao: manter coerencia com historico recente")
     return "\n".join(context)
 

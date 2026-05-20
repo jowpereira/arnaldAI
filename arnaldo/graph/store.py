@@ -334,6 +334,20 @@ class CognitiveGraph:
                 continue
             yield edge
 
+    def iter_edges(
+        self,
+        *,
+        kind: EdgeKind | None = None,
+        active_only: bool = True,
+    ) -> Iterator[GraphEdge]:
+        """Itera todas as arestas conhecidas no grafo."""
+        for edge in self._edges.values():
+            if kind is not None and edge.kind != kind:
+                continue
+            if active_only and not edge.is_active:
+                continue
+            yield edge
+
     def neighbors(
         self, node_id: str, *, kinds: Iterable[EdgeKind] | None = None
     ) -> Iterator[GraphNode]:
@@ -392,7 +406,7 @@ class CognitiveGraph:
         Args:
             node_id:       Nó-pai que ganhará a referência.
             subgraph:      Sub-grafo a anexar.
-            kind:          Tipo da relação (OWNED ou SHARED na Fase 2).
+            kind:          Tipo da relação (OWNED/SHARED/FEDERATED/SNAPSHOT).
             bridge_nodes:  IDs no sub-grafo expostos como interface.
             uri:           Path opcional para persistência do sub-grafo.
             ref_strength:  Peso inicial da referência ∈ [0,1].

@@ -132,9 +132,52 @@ def test_execute_synapse_applies_runtime_defaults_for_timeout_tokens_and_effort(
 
     assert result.success is True
     kwargs = client.calls[0]["kwargs"]
-    assert kwargs["timeout"] == 240.0
+    assert kwargs["timeout"] == 90.0
     assert kwargs["max_tokens"] == 1400
     assert kwargs["reasoning_effort"] == "medium"
+
+
+def test_execute_synapse_defaults_low_effort_for_artifact_actions() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    artifact_synapse = synapse.with_payload_merge(action="draft_artifact")
+    graph.add_node(artifact_synapse)
+    client = FakeTypedClient(responses=[_typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+
+    result = engine.execute_synapse(
+        artifact_synapse.id,
+        request="gerar artefato inicial",
+        context=StepContext(),
+    )
+
+    assert result.success is True
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["reasoning_effort"] == "low"
+
+
+def test_execute_synapse_defaults_high_effort_for_god_tier() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    client = FakeTypedClient(responses=[_typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+
+    result = engine.execute_synapse(
+        synapse.id,
+        request="avalie riscos",
+        context=StepContext(),
+        tier_override="god",
+    )
+
+    assert result.success is True
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["reasoning_effort"] == "high"
 
 
 def test_execute_synapse_emits_prompt_prepared_callback() -> None:

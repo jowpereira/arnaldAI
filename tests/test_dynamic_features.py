@@ -231,6 +231,47 @@ class DynamicFeatureTest(unittest.TestCase):
             "storage/tool_forge/generated/connector_github.py",
         )
 
+    def test_graph_runtime_reinforces_transitions_from_memory_hints(self) -> None:
+        intent = IntentCompiler(llm_client=False, strict_real=False).compile(
+            "Preciso analisar e decidir uma abordagem com síntese final",
+            autonomy="autonomo",
+        )
+        task = TaskCompiler().compile(intent)
+        task.goal["type"] = "analyze_or_evaluate"
+        task.risk["execution_risk"] = "high"
+        decision = CognitiveControlPlane().decide(task)
+        capability_resolution = {"available": [], "missing": [], "degraded": []}
+        organization = OrganizationGenerator().generate(task, decision, capability_resolution)
+        runtime = GraphRuntime()
+        graph, step_by_node, path = runtime._build_execution_graph(  # pylint: disable=protected-access
+            organization,
+            task=task,
+            capability_resolution=capability_resolution,
+            memory_hints={
+                "transitions": [
+                    {
+                        "source_action": "frame_intent",
+                        "target_action": "decision_synthesis",
+                        "score": 3.0,
+                    }
+                ]
+            },
+        )
+
+        source_nodes = [node_id for node_id in path if step_by_node[node_id]["action"] == "frame_intent"]
+        decision_nodes = [node_id for node_id in path if step_by_node[node_id]["action"] == "decision_synthesis"]
+        self.assertGreaterEqual(len(source_nodes), 1)
+        self.assertGreaterEqual(len(decision_nodes), 1)
+
+        decision_set = set(decision_nodes)
+        found = False
+        for source_id in source_nodes:
+            for edge in graph.iter_edges_from(source_id, kinds=[EdgeKind.ACTIVATES], active_only=False):
+                if edge.target_id in decision_set:
+                    self.assertGreaterEqual(edge.weight, 0.45)
+                    found = True
+        self.assertTrue(found)
+
     def test_graph_runtime_injects_compose_tooling_for_multiple_tooling_capabilities(self) -> None:
         intent = IntentCompiler(llm_client=False, strict_real=False).compile(
             "Executar conectores disponíveis e compor resultado integrado",
@@ -591,6 +632,8 @@ class DynamicFeatureTest(unittest.TestCase):
             self.assertTrue(any(node.id.startswith("syn_") for node in synapses))
             self.assertTrue(any(node.id.startswith("cap_") for node in capabilities))
             self.assertTrue(any(node.id.startswith("mem_") for node in memories))
+            self.assertTrue(any(node.payload.get("action") == "workflow_orchestrator" for node in synapses))
+            self.assertTrue(any(node.has_subgraphs for node in synapses))
 
     def test_parallel_topology_creates_branching_activates_edges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

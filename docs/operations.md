@@ -41,7 +41,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.12
 
 # 3. Clonar e criar venv
-cd /caminho/para/arnaldAI
+cd /caminho/para/arnaldai
 uv venv --python 3.12
 uv sync --extra dev          # inclui pytest, ruff, mypy
 ```
@@ -167,17 +167,11 @@ Mapa completo em `arnaldo/llm/router.py:TASK_TIER_MAP`.
 Detecção automática por presença de `/openai/v1` no endpoint. Para tiers
 custom, defina em `TierConfig.api_style`.
 
-### 2.6 Fallback heurístico
+### 2.6 Política strict-real
 
-Princípio: **se qualquer tier falhar, o kernel continua** com fallback
-determinístico:
-
-```python
-try:
-    enrichment = self._llm_client.chat_typed(...)
-except (LLMError, RuntimeError, ValueError):
-    return None  # heurístico mantém o resultado
-```
+Princípio: o pipeline principal roda em **modo real estrito**: sem fallback
+determinístico na CLI/runtime. Se a chamada LLM falhar, o turno falha com
+diagnóstico explícito.
 
 ### 2.7 Structured outputs (`response_format`)
 
@@ -225,11 +219,35 @@ uv run python -m arnaldo "Planeje um MVP" --out ./meus_resultados
 | `--out <dir>`       | Diretório onde a run vai ser registrada (default: `runs/`)       |
 
 Notas operacionais:
-- A CLI roda em `graph` por padrão e não expõe fallback local.
-- Execução é strict-real por natureza: sem `mock`, sem `fallback` e sem toggle por env.
+- A CLI roda em `graph` por padrão.
+- `strict_real` é obrigatório no fluxo principal da CLI/runtime.
 - Se LLM estiver indisponível/recusar/falhar, a run falha explicitamente com diagnóstico.
 - Cada run imprime resumo rico no terminal (topologia, contadores, evidências, trace e caminhos de artefatos).
-- Para mensagens de saudação/conversa inicial (`oi`, `olá`, etc.), o runtime materializa um workflow leve de 1 etapa no tier `fast` para reduzir latência.
+- Para mensagens de saudação/conversa inicial, o runtime aplica um detector lexical determinístico e, quando acionado, materializa workflow leve de 1 etapa no tier `fast`.
+
+### 3.2.1 Detector lexical de saudação (runtime real)
+
+No modo `graph`, o atalho de conversa inicial **não** usa mock/fallback: é uma
+regra de materialização de workflow aplicada antes da execução dos synapses.
+
+Condição de ativação (`_is_lightweight_conversational_task`):
+
+1. `task.goal.type == "open_ended_execution"`.
+2. `task.context.original_request` casa no prefixo:
+   `^(oi|ol[aá]|hello|hi|bom dia|boa tarde|boa noite)\b`
+3. Ou, alternativamente, `goal.statement` contém marcadores de saudação
+   (`sauda`, `cumpriment`, `conversa inicial`, `greeting`, `olá`, `ola`, `oi`).
+
+Efeito operacional quando ativado:
+
+- Workflow materializado com 1 step: `draft_artifact`.
+- `tier_preference = fast`, `max_tokens = 320`, `timeout = 20.0`, `temperature = 0.2`.
+- Evita pipeline longo (`frame_intent` + `decompose_work` + `critic_review`) em turnos de saudação.
+
+Limitação conhecida:
+
+- Por ser detector lexical, pode ter falso-positivo/falso-negativo em frases
+  ambíguas; o comportamento é intencional para reduzir latência no chat.
 
 ### 3.3 Níveis de autonomia
 
@@ -258,7 +276,7 @@ livre (6)       Intervenção mínima. Requer --accept-terms.
 ### 4.1 Layout completo
 
 ```
-arnaldAI/
+arnaldai/
 ├── runs/                            # output por execução (gitignored)
 │   └── run_<id>/
 │       ├── adaptive-plan.json        # plano adaptativo do turno

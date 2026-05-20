@@ -14,6 +14,7 @@ from arnaldo.graph import CapabilityNode, CognitiveGraph, EdgeKind, GraphEdge, N
 from arnaldo.kernel import ArnaldoKernel
 from arnaldo.llm.structured import TypedResponse
 from arnaldo.memory import MemoryStore
+from arnaldo.proactivity import ProactivityManager
 from arnaldo.runtime import GraphRuntime, SandboxManager
 from arnaldo.session import SessionManager
 from arnaldo.storage import RunStore
@@ -97,6 +98,7 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             tool_forge=ToolForge(base / "tool_forge"),
             capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
+            proactivity=ProactivityManager(base / "proactivity"),
         )
         llm_client = getattr(runtime_adapter, "llm_client", None)
         if llm_client is not None:
@@ -158,6 +160,105 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["tier_preference"], "fast")
         self.assertEqual(workflow[0]["max_tokens"], 320)
 
+    def test_graph_runtime_materializes_lightweight_workflow_for_greeting_prefix_in_context(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="pipeline_with_critic",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "objetivo genérico",
+                "type": "open_ended_execution",
+            },
+            context={
+                "source": "cli",
+                "original_request": "oi objetivos_extraidos_no_turno: oi",
+            },
+            capability_needs=[],
+            uncertainty=[],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertEqual(len(workflow), 1)
+        self.assertEqual(workflow[0]["action"], "draft_artifact")
+        self.assertEqual(workflow[0]["tier_preference"], "fast")
+        self.assertEqual(workflow[0]["max_tokens"], 320)
+
+    def test_graph_runtime_materializes_lightweight_workflow_for_identity_query(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="pipeline_with_critic",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "usuario pergunta quem ele e no contexto da conversa",
+                "type": "open_ended_execution",
+            },
+            context={
+                "source": "cli",
+                "raw_request": "quem sou eu?",
+                "session_user_name": "Jonathan",
+            },
+            capability_needs=[],
+            uncertainty=[{"question": "qual nome do usuario?"}],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertEqual(len(workflow), 1)
+        self.assertEqual(workflow[0]["action"], "draft_artifact")
+        self.assertIn("objective", workflow[0])
+        self.assertIn("output_contract", workflow[0])
+        self.assertEqual(workflow[0]["max_tokens"], 320)
+
+    def test_graph_runtime_materializes_single_step_for_conversational_cli_turn(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="pipeline_with_critic",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "responder de forma clara ao usuario",
+                "type": "open_ended_execution",
+            },
+            context={
+                "source": "cli",
+                "raw_request": "me explica de forma simples como podemos seguir com isso agora",
+            },
+            capability_needs=[],
+            uncertainty=[],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertEqual(len(workflow), 1)
+        self.assertEqual(workflow[0]["action"], "draft_artifact")
+        self.assertEqual(workflow[0]["tier_preference"], "fast")
+        self.assertEqual(workflow[0]["max_retries"], 0)
+        self.assertEqual(workflow[0]["retry_attempts"], 1)
+
     def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(self) -> None:
         runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
         organization = SimpleNamespace(
@@ -189,7 +290,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["action"], "draft_artifact")
         self.assertEqual(workflow[0]["tier_preference"], "fast")
         self.assertEqual(workflow[0]["max_tokens"], 700)
-        self.assertEqual(workflow[0]["timeout"], 45.0)
+        self.assertEqual(workflow[0]["timeout"], 25.0)
+        self.assertEqual(workflow[0]["max_retries"], 0)
+        self.assertEqual(workflow[0]["retry_attempts"], 1)
 
     def test_session_reuses_and_grows_execution_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -540,6 +643,77 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertIn("MissingCapabilities:", request)
         self.assertNotIn("PolicyAllowed", request)
         self.assertNotIn("ApprovalRequired", request)
+
+    def test_build_request_for_lightweight_conversation_uses_direct_chat_contract(self) -> None:
+        task = SimpleNamespace(
+            goal={"statement": "conversa inicial", "type": "open_ended_execution"},
+            context={"raw_request": "quem sou eu?", "session_user_name": "Jonathan"},
+            deliverables=[{"id": "primary_artifact"}],
+            capability_needs=[{"id": "artifact.draft"}],
+            uncertainty=[],
+        )
+        request = GraphRuntime._build_request(
+            task,
+            {"missing": [], "degraded": []},
+        )
+
+        self.assertIn("Mode: conversational_reply", request)
+        self.assertIn("UserMessage: quem sou eu?", request)
+        self.assertIn("SessionMemory.user_name: Jonathan", request)
+        self.assertNotIn("Goal:", request)
+        self.assertNotIn("CapabilityNeeds:", request)
+
+    def test_build_request_for_conversational_cli_turn_uses_direct_chat_contract(self) -> None:
+        task = SimpleNamespace(
+            goal={"statement": "responder de forma clara", "type": "open_ended_execution"},
+            context={"source": "cli", "raw_request": "legal e vc quem e", "session_user_name": "Jonathan"},
+            deliverables=[{"id": "primary_artifact"}],
+            capability_needs=[{"id": "artifact.draft"}],
+            uncertainty=[],
+        )
+        request = GraphRuntime._build_request(
+            task,
+            {"available": [], "missing": [], "degraded": []},
+        )
+
+        self.assertIn("Mode: conversational_reply", request)
+        self.assertIn("UserMessage: legal e vc quem e", request)
+        self.assertIn("SessionMemory.user_name: Jonathan", request)
+        self.assertNotIn("Goal:", request)
+        self.assertNotIn("CapabilityNeeds:", request)
+
+    def test_kernel_propagates_session_user_name_to_task_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            kernel = self._build_kernel(base)
+
+            kernel.run(
+                "meu nome e jonathan",
+                output_dir=base / "runs",
+                session_id="sessao_nome",
+            )
+            second = kernel.run(
+                "quem sou eu?",
+                output_dir=base / "runs",
+                session_id="sessao_nome",
+            )
+
+            task_ir = json.loads(second.files["task_ir"].read_text(encoding="utf-8"))
+            self.assertEqual(task_ir["context"]["raw_request"], "quem sou eu?")
+            self.assertEqual(task_ir["context"]["session_user_name"], "Jonathan")
+
+    def test_kernel_schedules_proactive_messages_after_non_lightweight_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            kernel = self._build_kernel(base)
+            result = kernel.run(
+                "analise as opções e proponha o próximo passo para validar hipóteses",
+                output_dir=base / "runs",
+                session_id="sessao_proativa",
+            )
+
+            self.assertEqual(result.session_id, "sessao_proativa")
+            self.assertGreaterEqual(kernel.pending_proactive_count("sessao_proativa"), 1)
 
     def test_graph_runtime_promotes_degraded_capability_after_successful_stabilization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -296,6 +296,12 @@ class ExecutionEngine:
             "max_retries": step_max_retries,
             "temperature": step_temperature,
         }
+        step_retry_attempts = self._resolve_payload_positive_int(
+            node.payload.get("retry_attempts"),
+            fallback=1,
+        )
+        if step_retry_attempts is not None:
+            chat_kwargs["retry_attempts"] = step_retry_attempts
         step_max_tokens = self._resolve_payload_positive_int(node.payload.get("max_tokens"))
         if step_max_tokens is None:
             step_max_tokens = self._default_max_tokens_for_action(action=action, tier=tier)
@@ -1103,12 +1109,12 @@ class ExecutionEngine:
     def _default_timeout_for_tier(tier: str) -> float:
         normalized = str(tier).strip().lower()
         if normalized == "fast":
-            return 45.0
+            return 30.0
         if normalized == "god":
-            return 300.0
+            return 120.0
         if normalized == "codex":
-            return 240.0
-        return 240.0
+            return 120.0
+        return 90.0
 
     @staticmethod
     def _default_max_tokens_for_action(*, action: str, tier: str) -> int:
@@ -1145,6 +1151,9 @@ class ExecutionEngine:
         normalized_tier = str(tier).strip().lower()
         if normalized_tier not in {"expert", "god", "codex"}:
             return ""
+        if normalized_tier == "god":
+            # Alguns deployments "pro" aceitam apenas high.
+            return "high"
         normalized_action = str(action).strip()
         if normalized_action in {
             "frame_intent",
@@ -1154,6 +1163,8 @@ class ExecutionEngine:
             "explore_path_b",
             "design_tooling",
             "stabilize_tooling",
+            "draft_artifact",
+            "synthesize_artifact",
         }:
             return "low"
         if normalized_action in {"critic_review", "risk_review", "decision_synthesis"}:

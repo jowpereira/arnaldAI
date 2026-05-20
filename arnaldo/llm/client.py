@@ -7,13 +7,13 @@ Suporta dois estilos de API:
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TypeVar
 
 from .config import (
-    API_STYLE_DEPLOYMENTS,
     API_STYLE_RESPONSES,
     API_STYLE_V1,
     AzureOpenAIConfig,
@@ -100,6 +100,7 @@ class AzureOpenAIClient:
         reasoning_effort: Optional[str] = None,
         reasoning_summary: Optional[str] = None,
         timeout: Optional[float] = None,
+        retry_attempts: Optional[int] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
         """Chamada síncrona ao Azure OpenAI.
@@ -114,6 +115,7 @@ class AzureOpenAIClient:
                               (apenas tiers com supports_reasoning=True)
             reasoning_summary: "auto" | "concise" | "detailed"
             timeout: override de timeout em segundos
+            retry_attempts: total de tentativas para falhas transitórias (default=3)
             extra: campos adicionais a passar para a API
 
         Raises:
@@ -142,7 +144,25 @@ class AzureOpenAIClient:
         effective_timeout = timeout if timeout is not None else self.config.timeout_seconds
         # api_key do tier > api_key global
         effective_api_key = tier_cfg.api_key or self.config.api_key
-        payload = self._send_request(url, body, effective_timeout, api_key=effective_api_key)
+        attempts = max(1, int(retry_attempts or 1))
+        payload: Dict[str, Any] | None = None
+        last_error: LLMError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                payload = self._send_request(url, body, effective_timeout, api_key=effective_api_key)
+                last_error = None
+                break
+            except LLMError as exc:
+                last_error = exc
+                if attempt >= attempts or not _is_transient_llm_error(exc):
+                    raise
+                backoff_seconds = min(3.0, 0.4 * float(attempt))
+                time.sleep(backoff_seconds)
+                continue
+        if payload is None:
+            if last_error is not None:
+                raise last_error
+            raise LLMError("Falha inesperada ao enviar requisição para Azure OpenAI.")
         return self._parse_response(payload, tier, tier_cfg)
 
     def chat_json(
@@ -204,6 +224,9 @@ class AzureOpenAIClient:
         call_kwargs = dict(kwargs)
         call_kwargs["response_format"] = response_format
         call_kwargs.setdefault("temperature", 0.0)
+        # Em respostas estruturadas, resumo de reasoning detalhado pode consumir
+        # o orçamento de saída e impedir emissão do JSON final.
+        call_kwargs.setdefault("reasoning_summary", "concise")
 
         attempts = max_retries + 1
         last_error: Exception | None = None
@@ -220,12 +243,40 @@ class AzureOpenAIClient:
                 )
 
             try:
-                payload = json.loads(response.content)
+                payload = _decode_json_object(response.content)
                 if not isinstance(payload, dict):
                     raise TypeError("payload JSON retornado não é objeto")
                 parsed = instantiate_dataclass(response_model, payload)
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                repaired_payload = self._attempt_typed_payload_repair(
+                    tier=tier,
+                    response_content=response.content,
+                    response_format=response_format,
+                    response_model=response_model,
+                    error=exc,
+                    call_kwargs=call_kwargs,
+                )
+                if repaired_payload is not None:
+                    try:
+                        parsed = instantiate_dataclass(response_model, repaired_payload)
+                        return TypedResponse(
+                            parsed=parsed,
+                            refusal=None,
+                            raw=response,
+                            schema_used=schema,
+                            retries=attempt,
+                        )
+                    except (TypeError, ValueError) as repaired_exc:
+                        last_error = repaired_exc
                 last_error = exc
+                if isinstance(exc, json.JSONDecodeError) and _is_length_finish_reason(
+                    response.finish_reason
+                ):
+                    call_kwargs["max_tokens"] = _next_max_tokens(
+                        _coerce_positive_int(call_kwargs.get("max_tokens")),
+                        tier_default=tier_cfg.default_max_tokens,
+                        hard_cap=8192,
+                    )
                 call_kwargs["temperature"] = 0.0
                 continue
 
@@ -240,6 +291,60 @@ class AzureOpenAIClient:
         raise LLMError(
             f"chat_typed: validação falhou após {attempts} tentativas: {last_error}"
         ) from last_error
+
+    def _attempt_typed_payload_repair(
+        self,
+        *,
+        tier: str,
+        response_content: str,
+        response_format: Dict[str, Any],
+        response_model: type[T],
+        error: Exception,
+        call_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        if not isinstance(error, json.JSONDecodeError):
+            return None
+        content = str(response_content or "").strip()
+        if "{" not in content:
+            return None
+        tier_cfg = self.config.tier(tier)
+        repair_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Repare o JSON inválido e retorne APENAS um objeto JSON válido. "
+                    "Não adicione explicações, markdown ou texto extra."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Contrato alvo: %s\nErro de parse: %s\nJSON inválido:\n%s"
+                    % (response_model.__name__, str(error), content)
+                ),
+            },
+        ]
+        repair_kwargs = dict(call_kwargs)
+        repair_kwargs["temperature"] = 0.0
+        repair_kwargs["response_format"] = response_format
+        repair_kwargs["max_tokens"] = _next_max_tokens(
+            _coerce_positive_int(repair_kwargs.get("max_tokens")),
+            tier_default=tier_cfg.default_max_tokens,
+            hard_cap=8192,
+        )
+        try:
+            repaired = self.chat(tier=tier, messages=repair_messages, **repair_kwargs)
+        except (LLMError, RuntimeError):
+            return None
+        if repaired.refusal is not None:
+            return None
+        try:
+            payload = _decode_json_object(repaired.content)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
 
     def generate_code(
         self,
@@ -514,7 +619,15 @@ class AzureOpenAIClient:
         choice = choices[0]
         message = choice.get("message", {})
         content = _extract_message_content_text(message.get("content", ""))
-        refusal = message.get("refusal")
+        refusal = _extract_chat_refusal(message)
+        if not content:
+            parsed_payload = message.get("parsed")
+            if isinstance(parsed_payload, dict):
+                content = json.dumps(parsed_payload, ensure_ascii=False)
+            elif isinstance(parsed_payload, list):
+                content = json.dumps(parsed_payload, ensure_ascii=False)
+        if not content:
+            content = _extract_tool_call_arguments(message.get("tool_calls"))
 
         reasoning_summary = None
         if tier_cfg.supports_reasoning:
@@ -620,7 +733,11 @@ def _extract_message_content_text(content: Any) -> str:
             if isinstance(item, dict):
                 if item.get("type") in {"text", "output_text"}:
                     text = item.get("text", "")
-                    if text:
+                    if isinstance(text, dict):
+                        value = text.get("value", "")
+                        if value:
+                            chunks.append(str(value))
+                    elif text:
                         chunks.append(str(text))
                     continue
                 nested = item.get("text")
@@ -630,3 +747,243 @@ def _extract_message_content_text(content: Any) -> str:
                         chunks.append(str(value))
         return "\n".join(chunks).strip()
     return str(content or "")
+
+
+def _decode_json_object(content: str) -> Any:
+    """Decodifica JSON com tolerância a ruído comum de modelos.
+
+    Estratégia:
+    1. tenta parse direto;
+    2. remove code fences markdown;
+    3. extrai o primeiro objeto JSON balanceado;
+    4. corrige newlines/tabs crus dentro de strings.
+    """
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        raise json.JSONDecodeError("empty JSON content", cleaned, 0)
+
+    candidates = _json_decode_candidates(cleaned)
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            normalized = _escape_control_chars_in_json_strings(candidate)
+            if normalized == candidate:
+                continue
+            try:
+                return json.loads(normalized)
+            except json.JSONDecodeError as normalized_exc:
+                last_error = normalized_exc
+                continue
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("unable to decode JSON object", cleaned, 0)
+
+
+def _json_decode_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _push(value: str) -> None:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    _push(text)
+    without_fence = _strip_markdown_code_fence(text)
+    _push(without_fence)
+
+    for base in (text, without_fence):
+        extracted = _extract_first_balanced_json_object(base)
+        if extracted:
+            _push(extracted)
+
+    return candidates
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) < 3:
+        return stripped
+    if not lines[-1].strip().startswith("```"):
+        return stripped
+    body = "\n".join(lines[1:-1]).strip()
+    return body or stripped
+
+
+def _extract_first_balanced_json_object(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    in_string = False
+    escaped = False
+    depth = 0
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+    return None
+
+
+def _escape_control_chars_in_json_strings(text: str) -> str:
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    changed = False
+
+    for ch in text:
+        if in_string:
+            if escaped:
+                out.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escaped = True
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                changed = True
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                changed = True
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                changed = True
+                continue
+            out.append(ch)
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = True
+            escaped = False
+
+    if not changed:
+        return text
+    return "".join(out)
+
+
+def _is_transient_llm_error(error: LLMError) -> bool:
+    if error.status in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+    message = str(error).lower()
+    transient_markers = (
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "connection closed",
+        "remote end closed connection",
+        "network error",
+    )
+    return any(marker in message for marker in transient_markers)
+
+
+def _looks_like_json_object(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return "{" in stripped and "}" in stripped and stripped.find("{") < stripped.rfind("}")
+
+
+def _extract_chat_refusal(message: Dict[str, Any]) -> str | None:
+    refusal = message.get("refusal")
+    if isinstance(refusal, str):
+        stripped = refusal.strip()
+        if stripped:
+            return stripped
+    content = message.get("content")
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "refusal":
+            continue
+        raw = item.get("refusal")
+        if not raw:
+            continue
+        stripped = str(raw).strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _extract_tool_call_arguments(tool_calls: Any) -> str:
+    if not isinstance(tool_calls, list):
+        return ""
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        arguments = function.get("arguments")
+        if arguments is None:
+            continue
+        text = str(arguments).strip()
+        if text:
+            return text
+    return ""
+
+
+def _is_length_finish_reason(finish_reason: str) -> bool:
+    normalized = str(finish_reason or "").strip().lower()
+    return normalized in {"length", "max_tokens", "max_output_tokens", "incomplete"}
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _next_max_tokens(
+    current: int | None,
+    *,
+    tier_default: int,
+    hard_cap: int,
+) -> int:
+    seed = current if current is not None else max(256, int(tier_default))
+    grown = int(seed * 1.6)
+    floor = max(seed + 256, tier_default)
+    return min(hard_cap, max(grown, floor))

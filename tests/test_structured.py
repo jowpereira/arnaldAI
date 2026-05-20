@@ -64,13 +64,18 @@ class StubAzureClient(AzureOpenAIClient):
         return self._stub_responses.pop(0)
 
 
-def _response(*, content: str, refusal: str | None = None) -> LLMResponse:
+def _response(
+    *,
+    content: str,
+    refusal: str | None = None,
+    finish_reason: str = "stop",
+) -> LLMResponse:
     return LLMResponse(
         content=content,
         tier="fast",
         deployment="fast-tier",
         model="fast-tier",
-        finish_reason="stop",
+        finish_reason=finish_reason,
         refusal=refusal,
     )
 
@@ -191,6 +196,146 @@ def test_chat_typed_retries_after_invalid_json() -> None:
     assert client.calls[1]["kwargs"]["temperature"] == 0.0
 
 
+def test_chat_typed_parses_json_inside_markdown_fence() -> None:
+    fenced = (
+        "```json\n"
+        '{"name":"ana","optional_note":"n","tags":["x"],'
+        '"child":{"value":"ok"},"priority":"low"}\n'
+        "```"
+    )
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[_response(content=fenced)],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+    )
+
+    assert result.is_success
+    assert result.parsed is not None
+    assert result.parsed.child.value == "ok"
+
+
+def test_chat_typed_parses_first_object_when_text_has_prefix_suffix() -> None:
+    noisy = (
+        "Segue abaixo o JSON solicitado:\n"
+        '{"name":"ana","optional_note":"n","tags":["x"],'
+        '"child":{"value":"ok"},"priority":"low"}\n'
+        "fim"
+    )
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[_response(content=noisy)],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+    )
+
+    assert result.is_success
+    assert result.parsed is not None
+    assert result.parsed.name == "ana"
+
+
+def test_chat_typed_recovers_from_raw_newline_inside_json_string() -> None:
+    broken = (
+        '{"name":"ana","optional_note":"linha 1\n'
+        'linha 2","tags":["x"],"child":{"value":"ok"},"priority":"high"}'
+    )
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[_response(content=broken)],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+    )
+
+    assert result.is_success
+    assert result.parsed is not None
+    assert result.parsed.optional_note == "linha 1\nlinha 2"
+
+
+def test_chat_typed_repairs_invalid_json_using_secondary_call() -> None:
+    broken = (
+        '{"name":"ana","optional_note":"nota","tags":["x"],'
+        '"child":{"value":"ok"},"priority":"high","extra":"abc'
+    )
+    repaired = (
+        '{"name":"ana","optional_note":"nota","tags":["x"],'
+        '"child":{"value":"ok"},"priority":"high"}'
+    )
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[_response(content=broken), _response(content=repaired)],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+        max_retries=0,
+    )
+
+    assert result.is_success
+    assert result.parsed is not None
+    assert result.parsed.priority is Priority.HIGH
+    assert len(client.calls) == 2
+
+
+def test_chat_typed_increases_max_tokens_after_incomplete_finish_reason() -> None:
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[
+            _response(content='{"name":"ana","optional_note":"x"', finish_reason="incomplete"),
+            _response(
+                content=(
+                    '{"name":"ana","optional_note":"n","tags":["x"],'
+                    '"child":{"value":"ok"},"priority":"low"}'
+                )
+            ),
+        ],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+        max_retries=1,
+        max_tokens=320,
+    )
+
+    assert result.is_success
+    assert len(client.calls) == 2
+    first_tokens = client.calls[0]["kwargs"]["max_tokens"]
+    second_tokens = client.calls[1]["kwargs"]["max_tokens"]
+    assert int(second_tokens) > int(first_tokens)
+
+
+def test_chat_typed_defaults_reasoning_summary_to_concise() -> None:
+    client = StubAzureClient(
+        api_style=API_STYLE_RESPONSES,
+        responses=[
+            _response(
+                content=(
+                    '{"name":"ana","optional_note":"n","tags":["x"],'
+                    '"child":{"value":"ok"},"priority":"low"}'
+                )
+            )
+        ],
+    )
+    result = client.chat_typed(
+        tier="fast",
+        messages=[{"role": "user", "content": "extraia"}],
+        response_model=Parent,
+    )
+
+    assert result.is_success
+    assert client.calls[0]["kwargs"]["reasoning_summary"] == "concise"
+
+
 def test_chat_typed_returns_refusal_without_retry() -> None:
     client = StubAzureClient(
         api_style=API_STYLE_RESPONSES,
@@ -207,4 +352,3 @@ def test_chat_typed_returns_refusal_without_retry() -> None:
     assert result.refusal == "blocked"
     assert result.retries == 0
     assert len(client.calls) == 1
-

@@ -31,6 +31,7 @@ from arnaldo.contracts import (
     utc_now,
 )
 from arnaldo.memory import MemoryStore, MemoryRecord
+from arnaldo.proactivity import ProactivityManager
 from arnaldo.reality import RealityGapDetector
 from arnaldo.runtime import (
     GraphRuntime,
@@ -57,6 +58,7 @@ class ArnaldoKernel:
         tool_forge: ToolForge | None = None,
         capabilities: CapabilityRegistry | None = None,
         sandbox_manager: SandboxManager | None = None,
+        proactivity: ProactivityManager | None = None,
     ) -> None:
         self.intent_compiler = IntentCompiler()
         self.task_compiler = TaskCompiler()
@@ -70,6 +72,7 @@ class ArnaldoKernel:
         self.runtime = runtime or self._build_runtime(runtime_mode)
         self.gap_detector = RealityGapDetector()
         self.memory = memory or MemoryStore()
+        self.proactivity = proactivity or ProactivityManager()
         self.sandboxes = sandbox_manager or SandboxManager()
 
     def run(
@@ -91,10 +94,16 @@ class ArnaldoKernel:
         intent = self.intent_compiler.compile(adaptive_plan.compiled_request, autonomy=session.autonomy_mode)
         self._apply_session_autonomy_overrides(intent.autonomy, intent.constraints, session)
         task = self.task_compiler.compile(intent)
+        self._inject_task_runtime_context(
+            task=task,
+            request=request,
+            session=session,
+            adaptive_plan=adaptive_plan,
+        )
         task.capability_needs = self.adaptive_planner.merge_capability_hints(task.capability_needs, adaptive_plan.capability_hints)
         decision = self.control_plane.decide(task)
         capability_resolution = self.capabilities.resolve(task.capability_needs)
-        tool_forge_report = {"created": [], "failed": []}
+        tool_forge_report: Dict[str, Any] = {"created": [], "failed": []}
         forge_targets = self._collect_forge_targets(capability_resolution)
         if forge_targets and adaptive_plan.should_forge_tools:
             tool_forge_report, session = self._run_tool_forge(forge_targets, session, run_id, task.id, store)
@@ -119,6 +128,18 @@ class ArnaldoKernel:
             files["tool_forge_report"] = store.write_json("tool-forge-report.json", tool_forge_report)
 
         self._evidence(store, run_id, task.id, "request_compiled", "Pedido convertido em IRs versionadas.")
+        memory_hints: Dict[str, Any] = {}
+        if hasattr(self.memory, "build_workflow_hints"):
+            goal_statement = ""
+            if isinstance(task.goal, dict):
+                goal_statement = str(task.goal.get("statement", "")).strip()
+            composed_goal = " ".join(chunk for chunk in [request.strip(), goal_statement] if chunk).strip()
+            try:
+                memory_hints = dict(self.memory.build_workflow_hints(goal=composed_goal, limit=12))
+            except Exception:
+                memory_hints = {}
+            if memory_hints:
+                files["memory_hints"] = store.write_json("memory-hints.json", memory_hints)
         if isinstance(self.runtime, GraphRuntime):
             self.runtime.set_seed_graph(session.learned_preferences.get("execution_graph_uri"))
         runtime_result = self.runtime.run(
@@ -129,6 +150,7 @@ class ArnaldoKernel:
                 policy=policy,
                 sandbox=to_dict(sandbox),
                 capability_resolution=capability_resolution,
+                memory_hints=memory_hints,
             ),
             store,
         )
@@ -156,7 +178,12 @@ class ArnaldoKernel:
                     task_id=task.id,
                     store=store,
                 )
-                graph_tool_forge_report = {"candidates": [], "created": [], "failed": [], "skipped": []}
+                graph_tool_forge_report: Dict[str, Any] = {
+                    "candidates": [],
+                    "created": [],
+                    "failed": [],
+                    "skipped": [],
+                }
                 if adaptive_plan.should_forge_tools:
                     graph_tool_forge_report, session = self._auto_forge_graph_capabilities(
                         graph_path=execution_graph,
@@ -223,8 +250,34 @@ class ArnaldoKernel:
                 "missing_capabilities": len(capability_resolution["missing"]),
             },
         )
+        proactive_scheduled = self.proactivity.schedule_from_run(
+            session=session,
+            task=task,
+            adaptive_plan=adaptive_plan,
+            run_id=run_id,
+        )
+        if proactive_scheduled > 0:
+            self._evidence(
+                store,
+                run_id,
+                task.id,
+                "proactive_scheduled",
+                "Mensagens proativas agendadas para continuidade de sessão.",
+                {"count": proactive_scheduled, "session_id": session.id},
+            )
         files["session_state"] = store.write_json("session-state.json", self.sessions.snapshot(session))
         return RunResult(run_id=run_id, run_dir=store.run_dir, files=files, session_id=session.id)
+
+    def pop_due_proactive_messages(self, session_id: str, *, limit: int = 3) -> list[str]:
+        due = self.proactivity.pop_due(session_id=session_id, limit=limit)
+        return [
+            str(item.get("message", "")).strip()
+            for item in due
+            if str(item.get("message", "")).strip()
+        ]
+
+    def pending_proactive_count(self, session_id: str) -> int:
+        return self.proactivity.pending_count(session_id=session_id)
 
     def _build_runtime_organization(
         self,
@@ -603,7 +656,7 @@ class ArnaldoKernel:
                 policies=policies,
             )
             self.capabilities.register(capability)
-            item = {
+            item: Dict[str, Any] = {
                 "id": capability_id,
                 "maturity": maturity,
                 "health": health,
@@ -884,6 +937,30 @@ class ArnaldoKernel:
                     },
                 )
             )
+        prospective_questions = [
+            str(item.get("question", "")).strip()
+            for item in (task_goal.get("uncertainty", []) if isinstance(task_goal, dict) else [])
+            if isinstance(item, dict) and str(item.get("question", "")).strip()
+        ]
+        if not prospective_questions:
+            for step in step_results or []:
+                for raw in step.get("uncertainties", []) if isinstance(step.get("uncertainties"), list) else []:
+                    question = str(raw).strip()
+                    if question:
+                        prospective_questions.append(question)
+        for question in prospective_questions[:3]:
+            self.memory.append(
+                MemoryRecord(
+                    id=new_id("memory"),
+                    kind="prospective",
+                    payload={
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "topic": question,
+                        "status": "pending",
+                    },
+                )
+            )
         if adaptive_plan.learning_updates:
             self.memory.append(
                 MemoryRecord(
@@ -895,6 +972,31 @@ class ArnaldoKernel:
                     },
                 )
             )
+
+    @staticmethod
+    def _inject_task_runtime_context(
+        *,
+        task: TaskIR,
+        request: str,
+        session: SessionState,
+        adaptive_plan: Any,
+    ) -> None:
+        context_raw = task.context if isinstance(task.context, dict) else {}
+        context = dict(context_raw)
+
+        raw_request = " ".join((request or "").strip().split())
+        if raw_request:
+            context["raw_request"] = raw_request
+
+        user_name = str(session.learned_preferences.get("user_name", "")).strip()
+        if user_name:
+            context["session_user_name"] = user_name
+
+        inferred = getattr(adaptive_plan, "inferred_objectives", None)
+        if isinstance(inferred, list) and inferred:
+            context["inferred_objectives"] = [str(item).strip() for item in inferred if str(item).strip()][:3]
+
+        task.context = context
 
     def _open_session(self, session_id: str | None, autonomy: str, terms_accepted: bool | None) -> SessionState:
         state = self.sessions.open(

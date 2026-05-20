@@ -24,8 +24,10 @@ from arnaldo.graph import (
     NodeKind,
     NodeStatus,
     StepContext,
+    SynapseExecutionResult,
     SynapseNode,
     SourceRecord,
+    make_workflow,
 )
 from arnaldo.llm import ContractModelRegistry
 from arnaldo.storage import RunStore
@@ -181,11 +183,25 @@ class GraphRuntime(RuntimeAdapter):
                 {"workspace": str(workspace_path), "artifacts": str(artifacts_path or "")},
             )
 
+        memory_hints = context.memory_hints if isinstance(context.memory_hints, dict) else {}
+        if memory_hints:
+            self._trace(
+                store,
+                run_id,
+                "memory_hints_loaded",
+                {
+                    "preferred_actions": len(memory_hints.get("preferred_actions", []) or []),
+                    "transitions": len(memory_hints.get("transitions", []) or []),
+                    "candidate_synapses": len(memory_hints.get("candidate_synapses", []) or []),
+                },
+            )
+
         base_graph = self._load_seed_graph()
         graph, step_by_node, path = self._build_execution_graph(
             organization,
             task=task,
             capability_resolution=context.capability_resolution or {},
+            memory_hints=memory_hints,
             graph=base_graph,
         )
         store.write_text("prompts.jsonl", "")
@@ -249,7 +265,7 @@ class GraphRuntime(RuntimeAdapter):
             path=path,
         )
         self._trace(store, run_id, "graph_context_bootstrapped", bootstrap_payload)
-        execution_results = []
+        execution_results: list[SynapseExecutionResult] = []
         if path:
             if execution_mode == "activates_parallel_levels":
                 _, step_context, execution_results = engine.execute_activates_parallel(
@@ -610,6 +626,7 @@ class GraphRuntime(RuntimeAdapter):
         *,
         task: Any,
         capability_resolution: Dict[str, Any],
+        memory_hints: Dict[str, Any] | None = None,
         graph: CognitiveGraph | None = None,
     ) -> tuple[CognitiveGraph, dict[str, dict[str, Any]], list[str]]:
         graph = graph or CognitiveGraph()
@@ -640,18 +657,23 @@ class GraphRuntime(RuntimeAdapter):
             self.contract_registry.register(model, name=model.__name__)
             role = agent.role if agent is not None else self._default_role_for_action(item["action"])
             objective = (
+                str(item.get("objective", "")).strip()
+                or (
                 agent.objective
                 if agent is not None
                 else self._default_objective_for_action(item["action"], item)
+                )
             )
-            output_contract = (
+            output_contract = item.get("output_contract")
+            if not isinstance(output_contract, dict) or not output_contract:
+                output_contract = (
                 agent.output_contract
                 if agent is not None
                 else {
                     "schema": "generic_step_output",
                     "required_sections": ["status", "evidence", "uncertainties"],
                 }
-            )
+                )
             metadata = {
                 "step_id": item["id"],
                 "action": item["action"],
@@ -670,6 +692,8 @@ class GraphRuntime(RuntimeAdapter):
                 metadata["temperature"] = float(item["temperature"])
             if item.get("max_retries"):
                 metadata["max_retries"] = int(item["max_retries"])
+            if item.get("retry_attempts"):
+                metadata["retry_attempts"] = int(item["retry_attempts"])
             if item.get("reasoning_effort"):
                 metadata["reasoning_effort"] = str(item["reasoning_effort"])
             if item.get("reasoning_summary"):
@@ -779,6 +803,19 @@ class GraphRuntime(RuntimeAdapter):
             node_ids_by_action=node_ids_by_action,
             step_by_node=step_by_node,
         )
+        self._reinforce_memory_transitions(
+            graph=graph,
+            node_ids_by_action=node_ids_by_action,
+            step_by_node=step_by_node,
+            memory_hints=memory_hints or {},
+        )
+        self._materialize_runtime_workflow_orchestrator(
+            graph=graph,
+            organization=organization,
+            task=task,
+            workflow=workflow,
+            path=path,
+        )
 
         return graph, step_by_node, path
 
@@ -790,6 +827,10 @@ class GraphRuntime(RuntimeAdapter):
         capability_resolution: Dict[str, Any],
     ) -> list[Dict[str, Any]]:
         lightweight_conversation = self._is_lightweight_conversational_task(task)
+        conversational_cli = self._is_conversational_cli_turn(
+            task=task,
+            capability_resolution=capability_resolution,
+        )
         latency_sensitive_cli = self._is_latency_sensitive_cli_turn(
             task=task,
             capability_resolution=capability_resolution,
@@ -841,12 +882,18 @@ class GraphRuntime(RuntimeAdapter):
             module_path = self._capability_module_path(item)
             if not module_path and capability_id:
                 module_path = module_path_by_capability.get(capability_id, "")
-            normalized = {
+            normalized: Dict[str, Any] = {
                 "id": str(item.get("id") or new_id("step")),
                 "agent_id": agent_id,
                 "action": action,
                 "output": output,
             }
+            objective = str(item.get("objective", "")).strip()
+            if objective:
+                normalized["objective"] = objective
+            output_contract = item.get("output_contract")
+            if isinstance(output_contract, dict) and output_contract:
+                normalized["output_contract"] = output_contract
             tier_preference = str(item.get("tier_preference", "")).strip()
             if tier_preference:
                 normalized["tier_preference"] = tier_preference
@@ -862,6 +909,9 @@ class GraphRuntime(RuntimeAdapter):
             max_retries = self._normalize_positive_int(item.get("max_retries"))
             if max_retries > 0:
                 normalized["max_retries"] = max_retries
+            retry_attempts = self._normalize_positive_int(item.get("retry_attempts"))
+            if retry_attempts > 0:
+                normalized["retry_attempts"] = retry_attempts
             reasoning_effort = str(item.get("reasoning_effort", "")).strip()
             if reasoning_effort:
                 normalized["reasoning_effort"] = reasoning_effort
@@ -883,19 +933,50 @@ class GraphRuntime(RuntimeAdapter):
                 workflow = self._workflow_seed_for_topology(organization.topology)
 
         if lightweight_conversation:
-            if not self._has_workflow_step(workflow, "draft_artifact"):
-                self._insert_workflow_step(
-                    workflow,
-                    len(workflow),
-                    action="draft_artifact",
-                    agent_id=self._default_agent_for_action("draft_artifact"),
-                    output=self._default_output_for_action("draft_artifact"),
-                    tier_preference="fast",
-                    max_tokens=320,
-                    timeout=20.0,
-                    temperature=0.2,
-                )
-            return workflow
+            compact = [
+                item
+                for item in workflow
+                if str(item.get("action", "")).strip() == "draft_artifact"
+            ]
+            if not compact:
+                compact = self._workflow_seed_for_lightweight_conversation()
+            item = compact[0]
+            item.setdefault("agent_id", self._default_agent_for_action("draft_artifact"))
+            item["action"] = "draft_artifact"
+            item.setdefault("output", self._default_output_for_action("draft_artifact"))
+            item["tier_preference"] = "fast"
+            item["max_tokens"] = 320
+            item["timeout"] = 18.0
+            item["temperature"] = 0.2
+            item["max_retries"] = 0
+            item["retry_attempts"] = 1
+            item["objective"] = self._lightweight_conversation_objective()
+            item["output_contract"] = self._lightweight_conversation_output_contract()
+            return [item]
+
+        if conversational_cli:
+            compact = [
+                item
+                for item in workflow
+                if str(item.get("action", "")).strip() == "draft_artifact"
+            ]
+            if not compact:
+                compact = self._workflow_seed_for_lightweight_conversation()
+            item = compact[0]
+            request = self._extract_primary_user_request(task)
+            words = self._word_count(request)
+            item.setdefault("agent_id", self._default_agent_for_action("draft_artifact"))
+            item["action"] = "draft_artifact"
+            item.setdefault("output", self._default_output_for_action("draft_artifact"))
+            item["tier_preference"] = "fast" if words <= 18 else "expert"
+            item["max_tokens"] = 420 if words <= 12 else 900
+            item["timeout"] = 25.0 if words <= 12 else 50.0
+            item["temperature"] = 0.2
+            item["max_retries"] = 0
+            item["retry_attempts"] = 1
+            item["objective"] = self._lightweight_conversation_objective()
+            item["output_contract"] = self._lightweight_conversation_output_contract()
+            return [item]
 
         if latency_sensitive_cli:
             compact = [
@@ -911,8 +992,10 @@ class GraphRuntime(RuntimeAdapter):
             item.setdefault("output", self._default_output_for_action("draft_artifact"))
             item.setdefault("tier_preference", "fast")
             item.setdefault("max_tokens", 700)
-            item.setdefault("timeout", 45.0)
+            item.setdefault("timeout", 25.0)
             item.setdefault("temperature", 0.2)
+            item.setdefault("max_retries", 0)
+            item.setdefault("retry_attempts", 1)
             return [item]
 
         if not self._has_workflow_step(workflow, "frame_intent"):
@@ -1080,8 +1163,12 @@ class GraphRuntime(RuntimeAdapter):
                 output="primary_artifact",
                 tier_preference="fast",
                 max_tokens=320,
-                timeout=20.0,
+                timeout=18.0,
                 temperature=0.2,
+                max_retries=0,
+                retry_attempts=1,
+                objective=self._lightweight_conversation_objective(),
+                output_contract=self._lightweight_conversation_output_contract(),
             ),
         ]
 
@@ -1095,10 +1182,31 @@ class GraphRuntime(RuntimeAdapter):
                 output="primary_artifact",
                 tier_preference="fast",
                 max_tokens=700,
-                timeout=45.0,
+                timeout=25.0,
                 temperature=0.2,
+                max_retries=0,
+                retry_attempts=1,
             ),
         ]
+
+    @staticmethod
+    def _lightweight_conversation_objective() -> str:
+        return (
+            "responder diretamente ao usuario em tom conversacional claro, "
+            "sem metalinguagem de pipeline, priorizando memoria de sessao quando houver"
+        )
+
+    @staticmethod
+    def _lightweight_conversation_output_contract() -> Dict[str, Any]:
+        return {
+            "schema": "chat_turn_output",
+            "required_sections": ["sections", "evidence", "uncertainties"],
+            "rules": [
+                "sections[0] deve conter a resposta final ao usuario",
+                "resposta deve ser natural e curta (1-4 frases)",
+                "nao mencionar goaltype, deliverables, capabilityneeds ou logs",
+            ],
+        }
 
     def _upsert_workflow_step(
         self,
@@ -1154,6 +1262,10 @@ class GraphRuntime(RuntimeAdapter):
         max_tokens: int | None = None,
         timeout: float | None = None,
         temperature: float | None = None,
+        max_retries: int | None = None,
+        retry_attempts: int | None = None,
+        objective: str | None = None,
+        output_contract: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         item: Dict[str, Any] = {
             "id": new_id("step"),
@@ -1161,6 +1273,10 @@ class GraphRuntime(RuntimeAdapter):
             "action": action,
             "output": output,
         }
+        if objective:
+            item["objective"] = str(objective).strip()
+        if isinstance(output_contract, dict) and output_contract:
+            item["output_contract"] = dict(output_contract)
         if tier_preference:
             item["tier_preference"] = str(tier_preference)
         if isinstance(max_tokens, int) and max_tokens > 0:
@@ -1169,6 +1285,10 @@ class GraphRuntime(RuntimeAdapter):
             item["timeout"] = float(timeout)
         if isinstance(temperature, (int, float)):
             item["temperature"] = float(temperature)
+        if isinstance(max_retries, int) and max_retries >= 0:
+            item["max_retries"] = max_retries
+        if isinstance(retry_attempts, int) and retry_attempts > 0:
+            item["retry_attempts"] = retry_attempts
         if capability_id:
             item["capability_id"] = capability_id
         if module_path:
@@ -1275,29 +1395,61 @@ class GraphRuntime(RuntimeAdapter):
         if goal_type != "open_ended_execution":
             return False
 
-        context_raw = getattr(task, "context", {})
-        context = context_raw if isinstance(context_raw, dict) else {}
-        original_request = str(context.get("original_request", "")).strip().lower()
-        greeting_pattern = r"^(oi|ol[aá]|hello|hi|bom dia|boa tarde|boa noite)\\b"
-        if original_request and re.match(greeting_pattern, original_request):
+        candidate = GraphRuntime._extract_primary_user_request(task).lower()
+        if candidate and re.match(r"^(oi|ol[aá]|hello|hi|bom dia|boa tarde|boa noite)\b", candidate):
+            return True
+        identity_patterns = (
+            r"\bquem sou eu\b",
+            r"\bqual (?:e|é) meu nome\b",
+            r"\bcomo eu me chamo\b",
+            r"\blembra do meu nome\b",
+            r"\bmeu nome (?:e|é)\b",
+            r"\bme chama de\b",
+            r"\bpode me chamar de\b",
+            r"\bme chama assim\b",
+            r"\bpode me chamar assim\b",
+        )
+        if candidate and any(re.search(pattern, candidate) for pattern in identity_patterns):
             return True
 
         statement = str(goal.get("statement", "")).strip().lower()
-        if not statement:
-            return False
-
-        markers = (
-            "sauda",
-            "cumpriment",
-            "conversa inicial",
-            "greeting",
-            "olá",
-            "ola",
-            "oi",
-        )
-        if any(marker in statement for marker in markers):
-            return True
+        if statement:
+            markers = (
+                "sauda",
+                "cumpriment",
+                "conversa inicial",
+                "greeting",
+                "olá",
+                "ola",
+                "oi",
+                "identidade no contexto da conversa",
+                "nome informado",
+            )
+            if any(marker in statement for marker in markers):
+                return True
         return False
+
+    @staticmethod
+    def _extract_primary_user_request(task: Any) -> str:
+        context_raw = getattr(task, "context", {})
+        context = context_raw if isinstance(context_raw, dict) else {}
+        raw = str(context.get("raw_request") or context.get("original_request") or "").strip()
+        if not raw:
+            return ""
+        cleaned = " ".join(raw.split())
+        markers = (
+            "contexto_objetivos_ativos:",
+            "objetivos_extraidos_no_turno:",
+            "continuidade_sessao:",
+        )
+        lower_cleaned = cleaned.lower()
+        cut = len(cleaned)
+        for marker in markers:
+            pos = lower_cleaned.find(marker)
+            if pos >= 0:
+                cut = min(cut, pos)
+        primary = cleaned[:cut].strip(" |;-")
+        return primary or cleaned
 
     @staticmethod
     def _is_latency_sensitive_cli_turn(
@@ -1315,10 +1467,10 @@ class GraphRuntime(RuntimeAdapter):
         source = str(context.get("source", "")).strip().lower()
         if source != "cli":
             return False
-        request = str(context.get("original_request", "")).strip()
+        request = GraphRuntime._extract_primary_user_request(task)
         if not request:
             return False
-        word_count = len([chunk for chunk in request.split() if chunk.strip()])
+        word_count = GraphRuntime._word_count(request)
         if word_count > 6:
             return False
 
@@ -1328,6 +1480,78 @@ class GraphRuntime(RuntimeAdapter):
                 if capability_id.startswith(("connector.", "tool.")):
                     return False
         return True
+
+    @staticmethod
+    def _is_conversational_cli_turn(
+        *,
+        task: Any,
+        capability_resolution: Dict[str, Any] | None = None,
+    ) -> bool:
+        goal = task.goal if isinstance(task.goal, dict) else {}
+        if str(goal.get("type", "")).strip() != "open_ended_execution":
+            return False
+        context_raw = getattr(task, "context", {})
+        context = context_raw if isinstance(context_raw, dict) else {}
+        source = str(context.get("source", "")).strip().lower()
+        if source != "cli":
+            return False
+        context_text = str(context.get("original_request", "")).strip().lower()
+        continuity_markers = (
+            "contexto_objetivos_ativos:",
+            "objetivos_extraidos_no_turno:",
+            "continuidade_sessao:",
+        )
+        has_chat_continuity = any(marker in context_text for marker in continuity_markers)
+        has_raw_chat_turn = bool(str(context.get("raw_request", "")).strip())
+        if not has_chat_continuity and not has_raw_chat_turn and not GraphRuntime._is_lightweight_conversational_task(task):
+            return False
+        request = GraphRuntime._extract_primary_user_request(task)
+        if not request:
+            return False
+        if GraphRuntime._contains_structured_execution_intent(request):
+            return False
+        if capability_resolution:
+            for bucket in ("missing", "degraded"):
+                for item in capability_resolution.get(bucket, []) or []:
+                    capability_id = str(item.get("id", "")).strip()
+                    if capability_id.startswith(("connector.", "tool.")):
+                        return False
+        if GraphRuntime._word_count(request) > 36 and not GraphRuntime._is_lightweight_conversational_task(task):
+            return False
+        return True
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len([chunk for chunk in str(text).split() if chunk.strip()])
+
+    @staticmethod
+    def _contains_structured_execution_intent(text: str) -> bool:
+        candidate = str(text).lower()
+        if not candidate:
+            return False
+        patterns = (
+            r"\bapi\b",
+            r"\bconector\b",
+            r"\bconnector\b",
+            r"\bworkflow\b",
+            r"\bferramenta\b",
+            r"\btool(?:ing)?\b",
+            r"\bintegrar\b",
+            r"\bimplement(?:ar|acao|ação)\b",
+            r"\bdesenvolver\b",
+            r"\bcriar\b",
+            r"\bprojetar\b",
+            r"\barquitetura\b",
+            r"\bmem[oó]ria\b",
+            r"\bgrafo\b",
+            r"\bsistema\b",
+            r"\bc[oó]digo\b",
+            r"\bbackend\b",
+            r"\bfrontend\b",
+            r"\brl\b",
+            r"\breinforcement\b",
+        )
+        return any(re.search(pattern, candidate) for pattern in patterns)
 
     @staticmethod
     def _infer_capability_id_from_output(
@@ -1772,6 +1996,80 @@ class GraphRuntime(RuntimeAdapter):
                 weight=weight,
             )
 
+    def _reinforce_memory_transitions(
+        self,
+        *,
+        graph: CognitiveGraph,
+        node_ids_by_action: Dict[str, list[str]],
+        step_by_node: Dict[str, Dict[str, Any]],
+        memory_hints: Dict[str, Any],
+    ) -> None:
+        transitions = memory_hints.get("transitions", []) if isinstance(memory_hints, dict) else []
+        if not isinstance(transitions, list):
+            return
+        for item in transitions:
+            if not isinstance(item, dict):
+                continue
+            source_action = str(item.get("source_action", "")).strip()
+            target_action = str(item.get("target_action", "")).strip()
+            if not source_action or not target_action:
+                continue
+            if source_action == target_action:
+                continue
+            score = self._normalize_positive_float(item.get("score"))
+            if score <= 0:
+                continue
+            normalized_weight = max(0.45, min(0.95, 0.45 + (0.15 * score)))
+            self._ensure_branch(
+                graph=graph,
+                source_action=source_action,
+                target_action=target_action,
+                node_ids_by_action=node_ids_by_action,
+                step_by_node=step_by_node,
+                weight=normalized_weight,
+            )
+
+    def _materialize_runtime_workflow_orchestrator(
+        self,
+        *,
+        graph: CognitiveGraph,
+        organization: Any,
+        task: Any,
+        workflow: list[Dict[str, Any]],
+        path: list[str],
+    ) -> None:
+        if not workflow:
+            return
+        workflow_id = "synwf_%s_%s" % (
+            self._slug(str(getattr(organization, "id", "org"))),
+            self._slug(str(getattr(task, "id", "task"))),
+        )
+        try:
+            orchestrator, _, _ = make_workflow(
+                graph,
+                workflow_id=workflow_id,
+                label="workflow::%s" % str(getattr(organization, "topology", "dynamic")),
+                steps=workflow,
+            )
+        except (ValueError, TypeError):
+            return
+        if not path:
+            return
+        self._ensure_edge(
+            graph=graph,
+            source_id=orchestrator.id,
+            target_id=path[0],
+            kind=EdgeKind.ACTIVATES,
+            weight=0.93,
+        )
+        self._ensure_edge(
+            graph=graph,
+            source_id=path[-1],
+            target_id=orchestrator.id,
+            kind=EdgeKind.DERIVED_FROM,
+            weight=0.65,
+        )
+
     @staticmethod
     def _should_skip_sequential_tooling_edge(
         source_item: Dict[str, Any],
@@ -1842,13 +2140,15 @@ class GraphRuntime(RuntimeAdapter):
                 )
                 return
             success_count = int(capability_node.payload.get("real_execution_successes", 0)) + 1
-            base_node = capability_node.with_payload_merge(
+            updated_base = capability_node.with_payload_merge(
                 real_execution_successes=success_count,
                 last_tool_execution_status=status or "executed",
                 state="available",
                 risk_level="low",
             )
-            assert isinstance(base_node, CapabilityNode)
+            if not isinstance(updated_base, CapabilityNode):
+                return
+            base_node = updated_base
             target_maturity = self._target_maturity_for_tool_execution(base_node, success_count)
         else:
             target_maturity = "tested" if action == "design_tooling" else "trusted"
@@ -1979,6 +2279,32 @@ class GraphRuntime(RuntimeAdapter):
 
     @staticmethod
     def _build_request(task: Any, capability_resolution: Dict[str, Any]) -> str:
+        if GraphRuntime._is_lightweight_conversational_task(task) or GraphRuntime._is_conversational_cli_turn(
+            task=task,
+            capability_resolution=capability_resolution,
+        ):
+            context_raw = getattr(task, "context", {})
+            context = context_raw if isinstance(context_raw, dict) else {}
+            user_message = GraphRuntime._extract_primary_user_request(task)
+            if not user_message:
+                goal = task.goal if isinstance(task.goal, dict) else {}
+                user_message = str(goal.get("statement", "")).strip()
+            session_user_name = str(context.get("session_user_name", "")).strip()
+            lines = [
+                "Mode: conversational_reply",
+                "UserMessage: %s" % user_message,
+                (
+                    "Instructions: responda em portugues (pt-BR), de forma natural e direta; "
+                    "nao descreva pipeline, goal, deliverables, capabilities, logs ou etapas internas."
+                ),
+            ]
+            if session_user_name:
+                lines.append("SessionMemory.user_name: %s" % session_user_name)
+                lines.append(
+                    "Se o usuario perguntar sobre identidade/nome, use SessionMemory.user_name com prioridade."
+                )
+            return "\n".join(lines)
+
         capability_needs = [
             str(item.get("id", "")).strip()
             for item in task.capability_needs
@@ -2062,7 +2388,8 @@ class GraphRuntime(RuntimeAdapter):
         store.append_jsonl("prompts.jsonl", record)
         messages = payload.get("messages")
         message_count = len(messages) if isinstance(messages, list) else 0
-        chat_kwargs = payload.get("chat_kwargs") if isinstance(payload.get("chat_kwargs"), dict) else {}
+        raw_chat_kwargs = payload.get("chat_kwargs")
+        chat_kwargs: Dict[str, Any] = raw_chat_kwargs if isinstance(raw_chat_kwargs, dict) else {}
         self._trace(
             store,
             run_id,

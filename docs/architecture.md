@@ -1346,6 +1346,31 @@ Quando algum limite é violado, o sistema avisa em validação e sugere
 decomposição. Conway: orgs reais raramente passam 3 níveis úteis — a
 restrição é alinhada com realidade organizacional.
 
+### 13.11.1 Heurística lexical para turnos de saudação (chat)
+
+Para reduzir latência em turnos de conversa inicial, o runtime aplica um
+detector determinístico antes da materialização final do workflow:
+
+```python
+if task.goal.type == "open_ended_execution":
+    if re.match(r"^(oi|ol[aá]|hello|hi|bom dia|boa tarde|boa noite)\b", original_request):
+        return lightweight_workflow()  # 1 step: draft_artifact (tier fast)
+```
+
+Além do prefix-match em `original_request`, há fallback lexical por marcadores
+em `goal.statement` (`sauda`, `cumpriment`, `conversa inicial`, `greeting`).
+
+Objetivo da heurística:
+
+- Evitar pipeline longo (`frame_intent`/`decompose_work`/`critic_review`) para
+  entradas como `oi`, `olá`, `hello`.
+- Preservar execução real por LLM no step leve (sem mock, sem bypass de runtime).
+
+Trade-off técnico:
+
+- Regra lexical é barata e determinística, mas não semântica.
+- Casos ambíguos podem exigir evolução para classificador semântico dedicado.
+
 ### 13.12 Anti-padrões explicitamente vetados
 
 | Anti-padrão                  | O que acontece           | Defesa em Arnaldo                       |

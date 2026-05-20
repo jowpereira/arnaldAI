@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import TYPE_CHECKING, Any, Dict, Iterable
+
+if TYPE_CHECKING:
+    from arnaldo.storage import RunStore
 
 
 @dataclass
@@ -20,10 +23,11 @@ class RuntimeContext:
     policy: Any
     sandbox: Dict[str, Any] | None = None
     capability_resolution: Dict[str, Any] | None = None
+    memory_hints: Dict[str, Any] | None = None
 
 
 class RuntimeAdapter:
     """Interface minima para adaptadores de runtime."""
 
-    def run(self, context: RuntimeContext, store: "RunStore") -> RuntimeResult:  # type: ignore[name-defined]
+    def run(self, context: RuntimeContext, store: RunStore) -> RuntimeResult:
         raise NotImplementedError

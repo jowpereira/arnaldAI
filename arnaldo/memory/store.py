@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,8 @@ class MemoryRecord:
 class MemorySynapseCandidate:
     source_memory_id: str
     target_memory_id: str
+    source_signature: str = ""
+    target_signature: str = ""
     support: int = 0
     greedy_score: float = 0.0
     materialized_synapse_id: str | None = None
@@ -38,7 +41,9 @@ class MemorySynapseCandidate:
 
     @property
     def key(self) -> str:
-        return f"{self.source_memory_id}->{self.target_memory_id}"
+        source = self.source_signature or self.source_memory_id
+        target = self.target_signature or self.target_memory_id
+        return f"{source}->{target}"
 
     @property
     def is_materialized(self) -> bool:
@@ -55,6 +60,8 @@ class MemorySynapseCandidate:
         return {
             "source_memory_id": self.source_memory_id,
             "target_memory_id": self.target_memory_id,
+            "source_signature": self.source_signature,
+            "target_signature": self.target_signature,
             "support": self.support,
             "greedy_score": self.greedy_score,
             "materialized_synapse_id": self.materialized_synapse_id,
@@ -63,14 +70,24 @@ class MemorySynapseCandidate:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "MemorySynapseCandidate":
+        materialized_raw = payload.get("materialized_synapse_id")
+        materialized = None
+        if materialized_raw is not None:
+            normalized = str(materialized_raw).strip()
+            if normalized and normalized.lower() not in {"none", "null"}:
+                materialized = normalized
+        source_memory_id = str(payload.get("source_memory_id", "")).strip()
+        target_memory_id = str(payload.get("target_memory_id", "")).strip()
+        source_signature = str(payload.get("source_signature", "")).strip()
+        target_signature = str(payload.get("target_signature", "")).strip()
         return cls(
-            source_memory_id=str(payload.get("source_memory_id", "")).strip(),
-            target_memory_id=str(payload.get("target_memory_id", "")).strip(),
+            source_memory_id=source_memory_id,
+            target_memory_id=target_memory_id,
+            source_signature=source_signature or source_memory_id,
+            target_signature=target_signature or target_memory_id,
             support=max(0, int(payload.get("support", 0))),
             greedy_score=max(0.0, min(1.0, float(payload.get("greedy_score", 0.0)))),
-            materialized_synapse_id=(
-                str(payload.get("materialized_synapse_id", "")).strip() or None
-            ),
+            materialized_synapse_id=materialized,
             last_seen_at=_parse_dt(payload.get("last_seen_at")),
         )
 
@@ -147,16 +164,110 @@ class MemoryStore:
         target = str(target_memory_id).strip()
         if not source or not target or source == target:
             return
-        candidate = self._candidates.get(f"{source}->{target}")
+        source_signature = source
+        target_signature = target
+        source_node = self._graph.get_node(source)
+        if isinstance(source_node, MemoryNode) and isinstance(source_node.payload, dict):
+            source_signature = _association_signature(source_node.payload, fallback=source)
+        target_node = self._graph.get_node(target)
+        if isinstance(target_node, MemoryNode) and isinstance(target_node.payload, dict):
+            target_signature = _association_signature(target_node.payload, fallback=target)
+        candidate = self._candidates.get(f"{source_signature}->{target_signature}")
+        if candidate is None:
+            candidate = self._candidates.get(f"{source}->{target}")
         if candidate is None:
             candidate = MemorySynapseCandidate(
                 source_memory_id=source,
                 target_memory_id=target,
+                source_signature=source_signature,
+                target_signature=target_signature,
             )
             self._candidates[candidate.key] = candidate
+        candidate.source_memory_id = source
+        candidate.target_memory_id = target
         candidate.register_observation(reward=reward)
         self._materialize_candidates()
         self._persist_graph_state()
+
+    def build_workflow_hints(self, *, goal: str, limit: int = 12) -> dict[str, Any]:
+        """Extrai preferências de workflow a partir da rede de memória.
+
+        A saída é usada pelo runtime para reforçar transições dinâmicas:
+        - ``preferred_actions``: ações com melhor evidência histórica.
+        - ``transitions``: pares source->target com score agregado.
+        """
+        goal_tokens = _tokenize_payload({"goal": goal or ""})
+        action_scores: dict[str, float] = defaultdict(float)
+        action_counts: dict[str, int] = defaultdict(int)
+
+        memory_by_id = {
+            node.id: node
+            for node in self._graph.iter_nodes(kind=NodeKind.MEMORY, active_only=False)
+        }
+        for node_id, node in memory_by_id.items():
+            payload = node.payload if isinstance(node.payload, dict) else {}
+            action = str(payload.get("action", "")).strip()
+            if not action:
+                continue
+            base = 1.0
+            overlap = _jaccard(goal_tokens, _tokenize_payload(payload))
+            if overlap > 0.0:
+                base += min(1.0, overlap * 2.0)
+            action_scores[action] += base
+            action_counts[action] += 1
+
+        transition_scores: dict[tuple[str, str], float] = defaultdict(float)
+        for edge in self._graph.iter_edges(active_only=False):
+            if edge.kind not in {EdgeKind.TEMPORAL_BEFORE, EdgeKind.SEMANTIC, EdgeKind.ACTIVATES}:
+                continue
+            source = memory_by_id.get(edge.source_id)
+            target = memory_by_id.get(edge.target_id)
+            if source is None or target is None:
+                continue
+            source_payload = source.payload if isinstance(source.payload, dict) else {}
+            target_payload = target.payload if isinstance(target.payload, dict) else {}
+            source_action = str(source_payload.get("action", "")).strip()
+            target_action = str(target_payload.get("action", "")).strip()
+            if not source_action or not target_action or source_action == target_action:
+                continue
+            weight = max(0.05, min(1.0, float(edge.weight)))
+            key = (source_action, target_action)
+            transition_scores[key] += weight
+
+        ranked_actions = sorted(
+            action_scores.items(),
+            key=lambda item: (item[1], action_counts[item[0]]),
+            reverse=True,
+        )[: max(1, int(limit))]
+        preferred_actions = [item[0] for item in ranked_actions]
+
+        ranked_transitions = sorted(
+            transition_scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[: max(1, int(limit))]
+        transitions = [
+            {
+                "source_action": source_action,
+                "target_action": target_action,
+                "score": round(score, 6),
+            }
+            for (source_action, target_action), score in ranked_transitions
+        ]
+
+        return {
+            "preferred_actions": preferred_actions,
+            "action_scores": [
+                {
+                    "action": action,
+                    "score": round(score, 6),
+                    "count": int(action_counts.get(action, 0)),
+                }
+                for action, score in ranked_actions
+            ],
+            "transitions": transitions,
+            "candidate_synapses": self.memory_synapses(limit=max(3, int(limit // 2) or 3)),
+        }
 
     # ── Grafo de memória ──────────────────────────────────────────────────
 
@@ -164,8 +275,18 @@ class MemoryStore:
         node = self._to_memory_node(record)
         self._graph.add_node(node)
         related = self._related_memories(node_id=node.id, payload=node.payload)
+        target_signature = _association_signature(node.payload, fallback=node.id)
         for source_id, reward in related:
-            candidate = self._upsert_candidate(source_id=source_id, target_id=node.id, reward=reward)
+            source_node = self._graph.get_node(source_id)
+            source_payload = source_node.payload if isinstance(source_node, MemoryNode) and isinstance(source_node.payload, dict) else {}
+            source_signature = _association_signature(source_payload, fallback=source_id)
+            candidate = self._upsert_candidate(
+                source_id=source_id,
+                target_id=node.id,
+                source_signature=source_signature,
+                target_signature=target_signature,
+                reward=reward,
+            )
             self._ensure_memory_transition(source_id=source_id, target_id=node.id, weight=reward)
             if candidate.is_materialized:
                 self._refresh_materialized_synapse(candidate)
@@ -249,12 +370,32 @@ class MemoryStore:
         top = scored[: self.association_window]
         return [(source_id, reward) for source_id, reward, _ in top]
 
-    def _upsert_candidate(self, *, source_id: str, target_id: str, reward: float) -> MemorySynapseCandidate:
-        key = f"{source_id}->{target_id}"
+    def _upsert_candidate(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        source_signature: str,
+        target_signature: str,
+        reward: float,
+    ) -> MemorySynapseCandidate:
+        key = f"{source_signature}->{target_signature}"
         candidate = self._candidates.get(key)
         if candidate is None:
-            candidate = MemorySynapseCandidate(source_memory_id=source_id, target_memory_id=target_id)
+            candidate = MemorySynapseCandidate(
+                source_memory_id=source_id,
+                target_memory_id=target_id,
+                source_signature=source_signature,
+                target_signature=target_signature,
+            )
             self._candidates[key] = candidate
+        else:
+            candidate.source_memory_id = source_id
+            candidate.target_memory_id = target_id
+            if source_signature:
+                candidate.source_signature = source_signature
+            if target_signature:
+                candidate.target_signature = target_signature
         candidate.register_observation(reward=reward)
         return candidate
 
@@ -271,7 +412,10 @@ class MemoryStore:
                 continue
             synapse_id = _memory_synapse_id(candidate.key)
             synapse = SynapseNode.specialist(
-                label=f"memory_association::{candidate.source_memory_id}->{candidate.target_memory_id}",
+                label=(
+                    "memory_association::%s->%s"
+                    % (candidate.source_signature or candidate.source_memory_id, candidate.target_signature or candidate.target_memory_id)
+                ),
                 id=synapse_id,
                 role="memory_associator",
                 objective="ativar memória relacionada com base em coocorrência recorrente",
@@ -280,6 +424,8 @@ class MemoryStore:
                 action="memory_association",
                 source_memory_id=candidate.source_memory_id,
                 target_memory_id=candidate.target_memory_id,
+                source_signature=candidate.source_signature or candidate.source_memory_id,
+                target_signature=candidate.target_signature or candidate.target_memory_id,
                 support=candidate.support,
                 greedy_score=round(candidate.greedy_score, 6),
             )
@@ -311,6 +457,8 @@ class MemoryStore:
             greedy_score=round(candidate.greedy_score, 6),
             source_memory_id=candidate.source_memory_id,
             target_memory_id=candidate.target_memory_id,
+            source_signature=candidate.source_signature or candidate.source_memory_id,
+            target_signature=candidate.target_signature or candidate.target_memory_id,
         )
         assert isinstance(updated, SynapseNode)
         self._graph.add_node(updated)
@@ -394,7 +542,10 @@ class MemoryStore:
         run_id = str(payload.get("run_id", "")).strip()
         session_id = str(payload.get("session_id", "")).strip()
         if run_id:
-            return SourceRecord.from_run(run_id, agent=str(payload.get("agent_id", "")).strip() or None)
+            agent_id = str(payload.get("agent_id", "")).strip()
+            if agent_id:
+                return SourceRecord.from_run(run_id, agent=agent_id)
+            return SourceRecord.from_run(run_id)
         if session_id:
             return SourceRecord.from_user(session_id)
         return SourceRecord.from_bootstrap("memory.store")
@@ -448,6 +599,28 @@ def _jaccard(a: Iterable[str], b: Iterable[str]) -> float:
 def _memory_synapse_id(key: str) -> str:
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
     return f"synmem_{digest}"
+
+
+def _association_signature(payload: dict[str, Any], *, fallback: str) -> str:
+    action = str(payload.get("action", "")).strip().lower()
+    capability_id = str(payload.get("capability_id", "")).strip().lower()
+    agent_id = str(payload.get("agent_id", "")).strip().lower()
+    record_kind = str(payload.get("record_kind", "")).strip().lower()
+    if action:
+        return "|".join(
+            [
+                record_kind or "memory",
+                action,
+                capability_id or "-",
+                agent_id or "-",
+            ]
+        )
+    summary = str(payload.get("summary", "")).strip().lower()
+    if summary:
+        summary_tokens = re.findall(r"[a-z0-9_]{3,}", summary)
+        if summary_tokens:
+            return "|".join([record_kind or "memory", "summary", "_".join(summary_tokens[:6])])
+    return str(fallback).strip() or "memory"
 
 
 def _parse_dt(value: Any) -> datetime:

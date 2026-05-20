@@ -165,7 +165,7 @@ class LocalRuntime(RuntimeAdapter):
         return path
 
 
-def execute_step(task: TaskIR, item: Dict[str, Any]) -> Dict[str, Any]:
+def execute_step(task: Any, item: Dict[str, Any]) -> Dict[str, Any]:
     action = item["action"]
     if action == "frame_intent":
         result = {
@@ -214,9 +214,9 @@ def execute_step(task: TaskIR, item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def render_artifact(
-    task: TaskIR,
-    organization: OrganizationIR,
-    policy: PolicyDecision,
+    task: Any,
+    organization: Any,
+    policy: Any,
     step_results: List[Dict[str, Any]],
 ) -> str:
     workflow_lines = "\n".join(
@@ -235,8 +235,13 @@ def render_artifact(
         "- `%s`: %s" % (item["action"], item["output"])
         for item in step_results
     )
+    response_text = _derive_human_response(task, step_results)
+    next_actions_lines = _derive_next_actions(step_results)
 
     return """# Artifact
+
+## Resposta
+%s
 
 ## Goal
 %s
@@ -260,10 +265,9 @@ def render_artifact(
 %s
 
 ## Next Actions
-- conectar um provider de raciocinio opcional mantendo fallback local
-- adicionar validacao de schema para cada IR
-- registrar capacidades reais no Capability Registry
+- %s
 """ % (
+        response_text,
         task.goal["statement"],
         task.goal["type"],
         organization.topology,
@@ -273,4 +277,56 @@ def render_artifact(
         result_lines,
         criteria_lines,
         uncertainty_lines,
+        next_actions_lines.replace("\n", "\n- "),
     )
+
+
+def _derive_human_response(task: Any, step_results: List[Dict[str, Any]]) -> str:
+    latest = _latest_result_payload(step_results)
+    sections = latest.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, str):
+                continue
+            text = section.strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered.startswith("status:"):
+                status_text = text.split(":", 1)[1].strip()
+                if status_text:
+                    return status_text
+            if lowered.startswith(("evidence:", "uncertainties:", "incertezas:")):
+                continue
+            return text
+
+    status = str(latest.get("status", "")).strip()
+    if status:
+        return status
+
+    goal = str(task.goal.get("statement", "")).strip()
+    if goal:
+        return "Objetivo recebido: %s" % goal
+    return "Execução concluída."
+
+
+def _derive_next_actions(step_results: List[Dict[str, Any]]) -> str:
+    latest = _latest_result_payload(step_results)
+    uncertainties = latest.get("uncertainties")
+    if isinstance(uncertainties, list):
+        cleaned = [
+            str(item).strip()
+            for item in uncertainties
+            if str(item).strip()
+        ]
+        if cleaned:
+            return "\n".join(cleaned[:3])
+    return "Informe o próximo objetivo de forma direta para continuar."
+
+
+def _latest_result_payload(step_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for item in reversed(step_results):
+        result = item.get("result")
+        if isinstance(result, dict):
+            return result
+    return {}

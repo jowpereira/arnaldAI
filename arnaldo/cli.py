@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
+from threading import Event, Lock, Thread
 import time
 from typing import Any, Optional
 
@@ -13,7 +14,7 @@ from typing import Any, Optional
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="arnaldo",
-        description="Roda o nucleo do Arnaldo em modo real (grafo, sem fallback).",
+        description="Roda o nucleo do Arnaldo em modo grafo (execucao real).",
     )
     parser.add_argument("intent", nargs="*", help="Intencao que o assistente deve compilar.")
     parser.add_argument(
@@ -42,14 +43,28 @@ def main() -> None:
         action="store_true",
         help="Inicia loop interativo continuo.",
     )
+    parser.add_argument(
+        "--chat-stream",
+        action="store_true",
+        help="No modo chat, exibe stream detalhado de trace/evidence/prompt (implica --chat).",
+    )
     args = parser.parse_args()
+    if args.chat_stream and not args.chat:
+        args.chat = True
 
     from .kernel import ArnaldoKernel
 
     kernel = ArnaldoKernel(runtime_mode="graph")
 
     if args.chat:
-        run_chat_loop(kernel, args.autonomy, Path(args.out), args.session, args.accept_terms)
+        run_chat_loop(
+            kernel,
+            args.autonomy,
+            Path(args.out),
+            args.session,
+            args.accept_terms,
+            stream_events=bool(args.chat_stream),
+        )
         return
 
     intent = " ".join(args.intent).strip()
@@ -80,40 +95,59 @@ def run_chat_loop(
     output_dir: Path,
     session_id: Optional[str],
     terms_accepted: bool,
+    *,
+    stream_events: bool = False,
 ) -> None:
     print("=" * 72)
     print("ARNALDO CHAT (modo real, sem fallback)")
     print("- runtime: graph")
     print("- llm: obrigatoria")
-    print("- saidas: runs + trace + evidence + artifact")
+    print("- saidas: resposta direta no terminal")
+    print("- observabilidade: cada mensagem gera uma run (pasta run_*)")
+    if stream_events:
+        print("- streaming detalhado: ligado (--chat-stream)")
     if session_id:
         print(f"- sessao: {session_id}")
+        pending = _safe_pending_proactive_count(kernel, session_id)
+        if pending > 0:
+            print(f"- proatividade: {pending} mensagem(ns) pendente(s)")
     print("=" * 72)
     print("Digite 'sair' para encerrar.")
 
-    while True:
-        intent = input("voce> ").strip()
-        if not intent:
-            continue
-        if intent.lower() in {"sair", "exit", "quit"}:
-            print("Sessao encerrada.")
-            return
+    notifier = _ProactiveNotifier(kernel=kernel)
+    notifier.set_session_id(session_id)
+    notifier.start()
 
-        try:
-            result = run_with_live_streaming(
-                kernel=kernel,
-                intent=intent,
-                autonomy=autonomy,
-                output_dir=output_dir,
-                session_id=session_id,
-                terms_accepted=terms_accepted,
-            )
-        except Exception as exc:
-            print_runtime_error(exc)
-            continue
+    try:
+        while True:
+            notifier.enable_prompt_mode()
+            intent = input("voce> ").strip()
+            notifier.disable_prompt_mode()
+            if not intent:
+                continue
+            if intent.lower() in {"sair", "exit", "quit"}:
+                print("Sessao encerrada.")
+                return
 
-        session_id = result.session_id or session_id
-        print_run_result(result, compact=True)
+            try:
+                result = run_with_live_streaming(
+                    kernel=kernel,
+                    intent=intent,
+                    autonomy=autonomy,
+                    output_dir=output_dir,
+                    session_id=session_id,
+                    terms_accepted=terms_accepted,
+                    stream_events=stream_events,
+                )
+            except Exception as exc:
+                print_runtime_error(exc)
+                continue
+
+            session_id = result.session_id or session_id
+            notifier.set_session_id(session_id)
+            print_chat_result(result)
+    finally:
+        notifier.stop()
 
 
 def run_with_live_streaming(
@@ -124,9 +158,19 @@ def run_with_live_streaming(
     output_dir: Path,
     session_id: str | None,
     terms_accepted: bool,
+    stream_events: bool = True,
     poll_interval: float = 0.08,
 ) -> Any:
     output_dir.mkdir(parents=True, exist_ok=True)
+    if not stream_events:
+        return kernel.run(
+            intent,
+            autonomy=autonomy,
+            output_dir=output_dir,
+            session_id=session_id,
+            terms_accepted=terms_accepted,
+        )
+
     known_run_dirs = _list_run_dir_names(output_dir)
     streamer = _RunStreamer(output_dir=output_dir, known_run_dirs=known_run_dirs)
 
@@ -144,6 +188,15 @@ def run_with_live_streaming(
             time.sleep(max(0.02, poll_interval))
         streamer.poll()
         return future.result()
+
+
+def print_chat_result(result: Any) -> None:
+    response = _build_chat_response(result)
+    if response:
+        print(f"arnaldo> {response}")
+    else:
+        print("arnaldo> (sem resposta legivel)")
+    print("")
 
 
 def print_run_result(result: Any, compact: bool = False) -> None:
@@ -313,6 +366,38 @@ def _safe_read_jsonl(path: Any) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             rows.append(value)
     return rows
+
+
+def _safe_pop_due_proactive_messages(kernel: Any, session_id: str) -> list[str]:
+    handler = getattr(kernel, "pop_due_proactive_messages", None)
+    if not callable(handler):
+        return []
+    try:
+        rows = handler(session_id, limit=2)
+    except Exception:
+        return []
+    if not isinstance(rows, list):
+        return []
+    messages = []
+    for item in rows:
+        text = str(item).strip()
+        if text:
+            messages.append(text)
+    return messages
+
+
+def _safe_pending_proactive_count(kernel: Any, session_id: str) -> int:
+    handler = getattr(kernel, "pending_proactive_count", None)
+    if not callable(handler):
+        return 0
+    try:
+        value = handler(session_id)
+    except Exception:
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _count_by_key(items: list[dict[str, Any]], key: str) -> dict[str, int]:
@@ -535,6 +620,8 @@ class _RunStreamer:
         now = time.monotonic()
         self._last_event_at = now
         self._last_heartbeat_at = now
+        self._heartbeat_idle_threshold = 3.0
+        self._heartbeat_interval = 5.0
 
     def poll(self) -> None:
         if self.run_dir is None:
@@ -555,18 +642,25 @@ class _RunStreamer:
             self._last_event_at = time.monotonic()
             return
         now = time.monotonic()
-        if now - self._last_heartbeat_at >= 1.2:
-            self._last_heartbeat_at = now
-            print(
-                "[stream][%s][heartbeat] running | trace=%d, evidence=%d, agent=%d, prompts=%d"
-                % (
-                    datetime.now().strftime("%H:%M:%S"),
-                    self.stream_positions["trace"],
-                    self.stream_positions["evidence"],
-                    self.stream_positions["agent_bus"],
-                    self.stream_positions["prompts"],
-                )
+        idle_seconds = now - self._last_event_at
+        if idle_seconds < self._heartbeat_idle_threshold:
+            return
+        if now - self._last_heartbeat_at < self._heartbeat_interval:
+            return
+        self._last_heartbeat_at = now
+        waiting_on = "llm" if self.stream_positions["prompts"] > 0 else "runtime"
+        print(
+            "[stream][%s][heartbeat] waiting_on=%s, idle=%.1fs | trace=%d, evidence=%d, agent=%d, prompts=%d"
+            % (
+                datetime.now().strftime("%H:%M:%S"),
+                waiting_on,
+                idle_seconds,
+                self.stream_positions["trace"],
+                self.stream_positions["evidence"],
+                self.stream_positions["agent_bus"],
+                self.stream_positions["prompts"],
             )
+        )
 
     def _stream_trace_rows(self) -> int:
         if self.run_dir is None:
@@ -634,6 +728,62 @@ class _RunStreamer:
         return emitted
 
 
+class _ProactiveNotifier:
+    def __init__(self, *, kernel: Any, poll_interval: float = 2.0) -> None:
+        self.kernel = kernel
+        self.poll_interval = max(0.5, float(poll_interval))
+        self._lock = Lock()
+        self._session_id: str | None = None
+        self._prompt_mode = False
+        self._stop = Event()
+        self._thread: Thread | None = None
+
+    def set_session_id(self, session_id: str | None) -> None:
+        with self._lock:
+            self._session_id = session_id
+
+    def enable_prompt_mode(self) -> None:
+        with self._lock:
+            self._prompt_mode = True
+
+    def disable_prompt_mode(self) -> None:
+        with self._lock:
+            self._prompt_mode = False
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = Thread(target=self._run, name="arnaldo-proactive-notifier", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is None:
+            return
+        thread.join(timeout=2.0)
+        self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._flush_due_messages()
+            self._stop.wait(self.poll_interval)
+
+    def _flush_due_messages(self) -> None:
+        with self._lock:
+            session_id = self._session_id
+            prompt_mode = self._prompt_mode
+        if not session_id or not prompt_mode:
+            return
+        messages = _safe_pop_due_proactive_messages(self.kernel, session_id)
+        if not messages:
+            return
+        print("")
+        for message in messages:
+            print(f"arnaldo(proativo)> {message}")
+        print("voce> ", end="", flush=True)
+
+
 def _build_agent_response_preview(result: Any, *, max_chars: int = 2200) -> str:
     files = dict(getattr(result, "files", {}) or {})
     selected: list[str] = []
@@ -649,6 +799,43 @@ def _build_agent_response_preview(result: Any, *, max_chars: int = 2200) -> str:
     if len(preview) > max_chars:
         preview = preview[:max_chars].rstrip() + "..."
     return preview
+
+
+def _build_chat_response(result: Any, *, max_chars: int = 1200) -> str:
+    files = dict(getattr(result, "files", {}) or {})
+    artifact_path = files.get("artifact")
+    if isinstance(artifact_path, Path) and artifact_path.exists():
+        try:
+            artifact = artifact_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            artifact = ""
+        if artifact:
+            sections = _parse_markdown_sections(artifact)
+            for title, body in sections:
+                if title.strip().lower() in {"resposta", "resposta final", "answer", "final answer"}:
+                    compact = _compact_block(body)
+                    if compact:
+                        return compact[:max_chars]
+
+    step_preview = _build_latest_step_preview(files)
+    if step_preview:
+        lines = []
+        for raw in step_preview.splitlines():
+            cleaned = raw.strip()
+            if cleaned.startswith("- "):
+                lines.append(cleaned[2:].strip())
+        if lines:
+            joined = "\n".join(lines[:3]).strip()
+            if joined:
+                return joined[:max_chars]
+        compact_step = _compact_block(step_preview)
+        if compact_step:
+            return compact_step[:max_chars]
+
+    artifact_preview = _build_artifact_preview(files)
+    if artifact_preview:
+        return artifact_preview[:max_chars]
+    return ""
 
 
 def _build_latest_step_preview(files: dict[str, Any]) -> str:

@@ -39,6 +39,7 @@ from .provenance import SourceKind, SourceRecord
 from .refs import GraphCycleError, GraphRef, GraphRefKind, GraphRegistry
 from .store import CognitiveGraph
 from .temporal import BiTemporal, ValidityWindow, utc_now
+from .workflows import WorkflowStepSpec, compose_workflows, make_workflow
 
 __all__ = [
     # Store principal
@@ -58,6 +59,9 @@ __all__ = [
     "GraphRefKind",
     "GraphRegistry",
     "GraphCycleError",
+    "WorkflowStepSpec",
+    "make_workflow",
+    "compose_workflows",
     # Enums
     "NodeKind",
     "NodeStatus",

@@ -433,6 +433,112 @@ class CodexTierTest(unittest.TestCase):
         from arnaldo.llm.config import CODEX
         self.assertIn(CODEX, client.config.tiers)
 
+    def test_chat_retries_transient_network_error(self) -> None:
+        client = self._build_client_with_codex()
+        calls = {"count": 0}
+
+        def fake_send_request(
+            url: str,
+            body: Dict[str, Any],
+            timeout: float,
+            *,
+            api_key: str | None = None,
+        ) -> Dict[str, Any]:
+            _ = (url, body, timeout, api_key)
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise LLMError("Azure OpenAI network error: Remote end closed connection without response")
+            return {
+                "model": "expert-tier",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "ok"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+        client._send_request = fake_send_request  # type: ignore[method-assign]
+
+        response = client.chat(
+            tier=EXPERT,
+            messages=[{"role": "user", "content": "ping"}],
+            retry_attempts=2,
+        )
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(calls["count"], 2)
+
+    def test_chat_parser_uses_message_parsed_when_content_empty(self) -> None:
+        client = self._build_client_with_codex()
+        expert = client.config.tier(EXPERT)
+        payload = {
+            "model": "expert-tier",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "",
+                        "parsed": {"steps": ["a"], "evidence": [], "uncertainties": []},
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        response = client._parse_response(payload, EXPERT, expert)
+        self.assertIn('"steps"', response.content)
+        self.assertIn('"a"', response.content)
+
+    def test_chat_parser_extracts_refusal_from_content_items(self) -> None:
+        client = self._build_client_with_codex()
+        expert = client.config.tier(EXPERT)
+        payload = {
+            "model": "expert-tier",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": [
+                            {"type": "refusal", "refusal": "policy block"},
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        response = client._parse_response(payload, EXPERT, expert)
+        self.assertEqual(response.refusal, "policy block")
+        self.assertEqual(response.content, "")
+
+    def test_chat_parser_uses_tool_call_arguments_when_content_empty(self) -> None:
+        client = self._build_client_with_codex()
+        expert = client.config.tier(EXPERT)
+        payload = {
+            "model": "expert-tier",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "emit_json",
+                                    "arguments": '{"steps":["a"],"evidence":[],"uncertainties":[]}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        response = client._parse_response(payload, EXPERT, expert)
+        self.assertIn('"steps"', response.content)
+        self.assertIn('"a"', response.content)
+
     # ─── helper ─────────────────────────────────────────────────
 
     @staticmethod
