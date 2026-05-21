@@ -21,9 +21,11 @@ Convenção de import público::
     from arnaldo.graph import SourceRecord, ValidityWindow
     from arnaldo.graph import GraphRef, GraphRefKind, GraphRegistry
 """
+
 from __future__ import annotations
 
 from .edges import EdgeKind, GraphEdge
+from .events import EventKind, GraphEvent
 from .execution import ExecutionEngine, StepContext, SynapseExecutionResult
 from .matching import HybridMatcher, MatchResult
 from .nodes import (
@@ -66,6 +68,7 @@ __all__ = [
     "NodeKind",
     "NodeStatus",
     "EdgeKind",
+    "EventKind",
     "SourceKind",
     # Sub-objetos
     "SourceRecord",
@@ -79,4 +82,6 @@ __all__ = [
     "DecayPolicy",
     # Utilidades
     "utc_now",
+    # Eventos
+    "GraphEvent",
 ]

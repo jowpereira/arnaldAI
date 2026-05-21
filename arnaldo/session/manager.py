@@ -21,6 +21,7 @@ class SessionState:
     active_objectives: List[Dict[str, Any]]
     learned_preferences: Dict[str, Any]
     tool_history: List[Dict[str, Any]]
+    message_history: List[Dict[str, Any]] | None = None
 
 
 class SessionManager:
@@ -57,7 +58,8 @@ class SessionManager:
             updated_at=created,
             autonomy_mode=autonomy_mode,
             terms_accepted=bool(terms_accepted),
-            governance_profile=governance_profile or self._default_profile(autonomy_mode, terms_accepted),
+            governance_profile=governance_profile
+            or self._default_profile(autonomy_mode, terms_accepted),
             turns=0,
             active_objectives=[],
             learned_preferences={},
@@ -80,6 +82,7 @@ class SessionManager:
             active_objectives=list(payload.get("active_objectives", [])),
             learned_preferences=dict(payload.get("learned_preferences", {})),
             tool_history=list(payload.get("tool_history", [])),
+            message_history=list(payload.get("message_history") or []),
         )
 
     def save(self, state: SessionState) -> SessionState:
@@ -88,7 +91,16 @@ class SessionManager:
             json.dumps(to_dict(state), indent=2, ensure_ascii=True),
             encoding="utf-8",
         )
+        # Atualiza índice de última sessão
+        self._update_last_session_index(state.id, state.updated_at)
         return state
+
+    def _update_last_session_index(self, session_id: str, updated_at: str) -> None:
+        idx_path = self.base_dir / "_last_session.json"
+        idx_path.write_text(
+            json.dumps({"id": session_id, "updated_at": updated_at}, ensure_ascii=True),
+            encoding="utf-8",
+        )
 
     def accept_terms(self, state: SessionState) -> SessionState:
         state.terms_accepted = True
@@ -96,7 +108,9 @@ class SessionManager:
             state.governance_profile = "self_managed"
         return self.save(state)
 
-    def register_objective(self, state: SessionState, statement: str, priority: int = 5) -> SessionState:
+    def register_objective(
+        self, state: SessionState, statement: str, priority: int = 5
+    ) -> SessionState:
         normalized = " ".join((statement or "").strip().split())
         if not normalized:
             return state
@@ -117,7 +131,9 @@ class SessionManager:
         )
         return self.save(state)
 
-    def mark_objective_status(self, state: SessionState, objective_id: str, status: str) -> SessionState:
+    def mark_objective_status(
+        self, state: SessionState, objective_id: str, status: str
+    ) -> SessionState:
         for item in state.active_objectives:
             if item["id"] == objective_id:
                 item["status"] = status
@@ -138,6 +154,12 @@ class SessionManager:
         metadata: Dict[str, Any] | None = None,
     ) -> SessionState:
         state.turns += 1
+        if state.message_history is None:
+            state.message_history = []
+        state.message_history.append({"role": "user", "content": user_message})
+        state.message_history.append({"role": "assistant", "content": system_summary})
+        # Janela de contexto: mantém últimas 40 mensagens (20 turnos)
+        state.message_history = state.message_history[-40:]
         event = {
             "id": new_id("turn"),
             "session_id": state.id,
@@ -190,3 +212,23 @@ class SessionManager:
 
     def _history_file(self, session_id: str) -> Path:
         return self.base_dir / f"{session_id}.history.jsonl"
+
+    def last_active_session(self, *, max_age_hours: int = 24) -> str | None:
+        """Retorna o session_id mais recente dentro de max_age_hours, ou None."""
+        from datetime import datetime, timezone
+
+        idx_path = self.base_dir / "_last_session.json"
+        if not idx_path.exists():
+            return None
+        try:
+            data = json.loads(idx_path.read_text(encoding="utf-8"))
+            updated = data.get("updated_at", "")
+            if not updated:
+                return None
+            dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+            if age_hours > max_age_hours:
+                return None
+            return data.get("id")
+        except (json.JSONDecodeError, ValueError, KeyError, OSError):
+            return None

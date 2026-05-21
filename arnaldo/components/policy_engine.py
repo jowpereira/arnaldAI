@@ -30,14 +30,19 @@ class PolicyEngine:
             reasons.append("organizacao contem checkpoint humano bloqueante")
         if autonomy_mode == "manual":
             reasons.append("modo manual exige aprovacao a cada etapa")
-        if task.constraints.get("external_side_effects") == "approval_required" and not self_managed:
+        if (
+            task.constraints.get("external_side_effects") == "approval_required"
+            and not self_managed
+        ):
             reasons.append("efeitos externos permanecem bloqueados neste runtime")
         if self_managed:
             reasons.append("termos aceitos: autonomia ampliada com intervencao minima")
         if not reasons:
             reasons.append("execucao local permitida")
 
-        escalation_plan = self._build_escalation_plan(approval_required, autonomy_mode, self_managed)
+        escalation_plan = self._build_escalation_plan(
+            approval_required, autonomy_mode, self_managed
+        )
 
         telemetry = {
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
@@ -78,7 +83,9 @@ class PolicyEngine:
             "spend_money": "blocked",
         }
 
-    def _build_escalation_plan(self, approval_required: bool, autonomy_mode: str, self_managed: bool) -> Dict[str, Any]:
+    def _build_escalation_plan(
+        self, approval_required: bool, autonomy_mode: str, self_managed: bool
+    ) -> Dict[str, Any]:
         if self_managed:
             return {
                 "contact": "human_on_demand",

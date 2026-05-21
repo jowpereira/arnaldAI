@@ -1,23 +1,92 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-import importlib.util
-import os
-from pathlib import Path
-from typing import Any, Dict
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict
 
 from arnaldo.contracts import (
-    EvidenceRecord,
-    RuntimeEvent,
-    new_id,
-    to_dict,
     utc_now,
 )
 from arnaldo.storage import RunStore
 
 from .base import RuntimeAdapter, RuntimeContext, RuntimeResult
 from .local import execute_step, render_artifact
+from .tooling import run_tooling_step
+from .tracing import evidence as _evidence_shared, trace as _trace_shared
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Funções utilitárias do multiagent
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def build_waves(workflow: list[Dict[str, Any]]) -> list[list[tuple[int, Dict[str, Any]]]]:
+    parallel_keys = {"explore_paths", "design_tooling", "stabilize_tooling", "execute_tooling"}
+    waves: list[list[tuple[int, Dict[str, Any]]]] = []
+    current_wave: list[tuple[int, Dict[str, Any]]] = []
+    current_key = ""
+
+    for index, item in enumerate(workflow):
+        action = str(item.get("action", "")).strip()
+        if not action:
+            continue
+        key = _wave_key(action)
+        if not current_wave:
+            current_wave = [(index, item)]
+            current_key = key
+            continue
+        if key == current_key and key in parallel_keys:
+            current_wave.append((index, item))
+            continue
+        waves.append(current_wave)
+        current_wave = [(index, item)]
+        current_key = key
+
+    if current_wave:
+        waves.append(current_wave)
+    return waves
+
+
+def _wave_key(action: str) -> str:
+    if action in {"explore_path_a", "explore_path_b"}:
+        return "explore_paths"
+    if action in {"design_tooling", "stabilize_tooling", "execute_tooling"}:
+        return action
+    return "serial::%s" % action
+
+
+def snapshot_outputs(shared_outputs: dict[str, Any], *, limit: int = 8) -> dict[str, str]:
+    if not shared_outputs:
+        return {}
+    items = list(shared_outputs.items())[-limit:]
+    return {str(key): json.dumps(value, ensure_ascii=True)[:320] for key, value in items}
+
+
+def _env_positive_int(name: str, *, default: int) -> int:
+    raw = str(os.environ.get(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _trace(store: RunStore, run_id: str, event_type: str, payload: Dict[str, Any]) -> None:
+    _trace_shared(store, run_id, event_type, payload)
+
+
+def _evidence(
+    store: RunStore,
+    run_id: str,
+    task_id: str,
+    record_type: str,
+    summary: str,
+    payload: Dict[str, Any],
+) -> None:
+    _evidence_shared(store, run_id, task_id, record_type, summary, payload)
 
 
 class MultiAgentRuntime(RuntimeAdapter):
@@ -26,7 +95,7 @@ class MultiAgentRuntime(RuntimeAdapter):
     def __init__(self) -> None:
         self.enabled = True
         self.provider_config: dict[str, Any] = {}
-        self.max_parallel = self._env_positive_int("ARNALDO_MULTIAGENT_MAX_PARALLEL", default=4)
+        self.max_parallel = _env_positive_int("ARNALDO_MULTIAGENT_MAX_PARALLEL", default=4)
 
     def configure_provider(self, **kwargs: Any) -> None:
         self.provider_config = kwargs
@@ -42,10 +111,10 @@ class MultiAgentRuntime(RuntimeAdapter):
         policy = context.policy
 
         workflow = [dict(item) for item in organization.workflow]
-        waves = self._build_waves(workflow)
+        waves = build_waves(workflow)
         bus_path = store.write_text("agent_bus.jsonl", "")
 
-        self._trace(
+        _trace(
             store,
             run_id,
             "multiagent_runtime_started",
@@ -62,7 +131,7 @@ class MultiAgentRuntime(RuntimeAdapter):
         for wave_index, wave in enumerate(waves, start=1):
             wave_actions = [str(item["action"]) for _, item in wave]
             wave_agents = [str(item["agent_id"]) for _, item in wave]
-            self._trace(
+            _trace(
                 store,
                 run_id,
                 "multiagent_wave_started",
@@ -74,7 +143,7 @@ class MultiAgentRuntime(RuntimeAdapter):
                 },
             )
 
-            context_snapshot = self._snapshot_outputs(shared_outputs)
+            context_snapshot = snapshot_outputs(shared_outputs)
             if len(wave) == 1:
                 index, item = wave[0]
                 result, events = self._execute_agent_step(
@@ -98,8 +167,7 @@ class MultiAgentRuntime(RuntimeAdapter):
                         for index, item in wave
                     }
                     wave_results = [
-                        (index, *future_map[index].result())
-                        for index in sorted(future_map.keys())
+                        (index, *future_map[index].result()) for index in sorted(future_map.keys())
                     ]
 
             completed = 0
@@ -109,7 +177,7 @@ class MultiAgentRuntime(RuntimeAdapter):
                 step_results.append(result)
                 shared_outputs[result["output"]] = result["result"]
                 completed += 1
-                self._evidence(
+                _evidence(
                     store,
                     run_id,
                     task.id,
@@ -119,7 +187,7 @@ class MultiAgentRuntime(RuntimeAdapter):
                     result,
                 )
 
-            self._trace(
+            _trace(
                 store,
                 run_id,
                 "multiagent_wave_completed",
@@ -138,7 +206,7 @@ class MultiAgentRuntime(RuntimeAdapter):
         )
         artifact_path = store.write_text("artifact.md", artifact)
 
-        self._trace(
+        _trace(
             store,
             run_id,
             "multiagent_runtime_completed",
@@ -220,139 +288,8 @@ class MultiAgentRuntime(RuntimeAdapter):
         item: Dict[str, Any],
         context_snapshot: dict[str, str],
     ) -> dict[str, Any]:
-        module_path_raw = str(item.get("module_path", "")).strip()
-        capability_id = str(item.get("capability_id", "")).strip()
-        if not module_path_raw:
-            return {
-                "status": "not_implemented",
-                "reason": "missing_module_path",
-                "capability_id": capability_id,
-            }
-
-        module_path = Path(module_path_raw)
-        if not module_path.exists():
-            return {
-                "status": "failed",
-                "reason": "module_path_not_found",
-                "capability_id": capability_id,
-                "module_path": str(module_path),
-            }
-
-        try:
-            module_name = "arnaldo_multiagent_tool_%s" % abs(hash(str(module_path)))
-            spec = importlib.util.spec_from_file_location(module_name, str(module_path))
-            if spec is None or spec.loader is None:
-                raise RuntimeError("nao foi possivel carregar modulo %s" % module_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            runner = getattr(module, "run", None)
-            if not callable(runner):
-                raise RuntimeError("modulo %s nao define run(payload)" % module_path)
-            payload = {
-                "request": str(task.goal.get("statement", "")),
-                "capability_id": capability_id,
-                "context": context_snapshot,
-            }
-            raw = runner(payload)
-            if isinstance(raw, dict):
-                result = dict(raw)
-            else:
-                result = {"result": raw}
-            result.setdefault("status", "completed")
-            if capability_id:
-                result.setdefault("capability_id", capability_id)
-            result.setdefault("module_path", str(module_path))
-            return result
-        except Exception as exc:
-            return {
-                "status": "error",
-                "error": str(exc),
-                "capability_id": capability_id,
-                "module_path": str(module_path),
-            }
-
-    @staticmethod
-    def _build_waves(workflow: list[Dict[str, Any]]) -> list[list[tuple[int, Dict[str, Any]]]]:
-        parallel_keys = {"explore_paths", "design_tooling", "stabilize_tooling", "execute_tooling"}
-        waves: list[list[tuple[int, Dict[str, Any]]]] = []
-        current_wave: list[tuple[int, Dict[str, Any]]] = []
-        current_key = ""
-
-        for index, item in enumerate(workflow):
-            action = str(item.get("action", "")).strip()
-            if not action:
-                continue
-            key = MultiAgentRuntime._wave_key(action)
-            if not current_wave:
-                current_wave = [(index, item)]
-                current_key = key
-                continue
-            if key == current_key and key in parallel_keys:
-                current_wave.append((index, item))
-                continue
-            waves.append(current_wave)
-            current_wave = [(index, item)]
-            current_key = key
-
-        if current_wave:
-            waves.append(current_wave)
-        return waves
-
-    @staticmethod
-    def _wave_key(action: str) -> str:
-        if action in {"explore_path_a", "explore_path_b"}:
-            return "explore_paths"
-        if action in {"design_tooling", "stabilize_tooling", "execute_tooling"}:
-            return action
-        return "serial::%s" % action
-
-    @staticmethod
-    def _snapshot_outputs(shared_outputs: dict[str, Any], *, limit: int = 8) -> dict[str, str]:
-        if not shared_outputs:
-            return {}
-        items = list(shared_outputs.items())[-limit:]
-        return {
-            str(key): json.dumps(value, ensure_ascii=True)[:320]
-            for key, value in items
-        }
-
-    @staticmethod
-    def _env_positive_int(name: str, *, default: int) -> int:
-        raw = str(os.environ.get(name, "")).strip()
-        if not raw:
-            return default
-        try:
-            parsed = int(raw)
-        except ValueError:
-            return default
-        return parsed if parsed > 0 else default
-
-    def _trace(self, store: RunStore, run_id: str, event_type: str, payload: Dict[str, Any]) -> None:
-        event = RuntimeEvent(
-            id=new_id("event"),
-            run_id=run_id,
-            created_at=utc_now(),
-            event_type=event_type,
-            payload=payload,
+        return run_tooling_step(
+            task=task,
+            item=item,
+            context_snapshot=context_snapshot,
         )
-        store.append_jsonl("trace.jsonl", to_dict(event))
-
-    def _evidence(
-        self,
-        store: RunStore,
-        run_id: str,
-        task_id: str,
-        record_type: str,
-        summary: str,
-        payload: Dict[str, Any],
-    ) -> None:
-        record = EvidenceRecord(
-            id=new_id("evidence"),
-            run_id=run_id,
-            task_id=task_id,
-            created_at=utc_now(),
-            record_type=record_type,
-            summary=summary,
-            payload=payload,
-        )
-        store.append_jsonl("evidence.jsonl", to_dict(record))

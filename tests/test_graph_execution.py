@@ -4,7 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 
-from arnaldo.graph import CognitiveGraph, EdgeKind, ExecutionEngine, GraphEdge, StepContext, SynapseNode
+from arnaldo.graph import (
+    CognitiveGraph,
+    EdgeKind,
+    ExecutionEngine,
+    GraphEdge,
+    StepContext,
+    SynapseNode,
+)
 from arnaldo.llm.structured import TypedResponse
 
 
@@ -27,7 +34,9 @@ class FakeTypedClient:
         self.error = error
         self.calls: list[dict[str, object]] = []
 
-    def chat_typed(self, tier: str, messages: list[dict[str, str]], **kwargs: object) -> TypedResponse[SynapseOutput]:
+    def chat_typed(
+        self, tier: str, messages: list[dict[str, str]], **kwargs: object
+    ) -> TypedResponse[SynapseOutput]:
         self.calls.append({"tier": tier, "messages": messages, "kwargs": kwargs})
         if self.error is not None:
             raise self.error
@@ -108,7 +117,9 @@ def test_execute_synapse_applies_step_level_llm_hints() -> None:
         model_registry={"SynapseOutput": SynapseOutput},
     )
 
-    result = engine.execute_synapse(tuned.id, request="analise este plano", context=StepContext(), max_retries=2)
+    result = engine.execute_synapse(
+        tuned.id, request="analise este plano", context=StepContext(), max_retries=2
+    )
 
     assert result.success is True
     kwargs = client.calls[0]["kwargs"]
@@ -238,7 +249,7 @@ def test_execute_synapse_fallback_when_model_missing() -> None:
 
     result = engine.execute_synapse(synapse.id, request="analise", context=ctx)
 
-    assert result.success is True
+    assert result.success is False
     assert result.fallback_used is True
     assert result.output["reason"] == "missing_output_contract_model"
     updated = graph.get_node(synapse.id)
@@ -273,7 +284,9 @@ def test_execute_synapse_records_error_when_llm_raises() -> None:
 
 def test_step_context_tracks_versioned_related_history() -> None:
     ctx = StepContext()
-    ctx.write("syn_a", {"status": "planned"}, action="frame_intent", agent_id="framer", channel="llm")
+    ctx.write(
+        "syn_a", {"status": "planned"}, action="frame_intent", agent_id="framer", channel="llm"
+    )
     ctx.write(
         "syn_tool",
         {"status": "executed", "result": {"ok": True}},
@@ -282,7 +295,9 @@ def test_step_context_tracks_versioned_related_history() -> None:
         capability_id="connector.runtime",
         channel="tool",
     )
-    ctx.write("syn_c", {"status": "reviewed"}, action="critic_review", agent_id="critic", channel="llm")
+    ctx.write(
+        "syn_c", {"status": "reviewed"}, action="critic_review", agent_id="critic", channel="llm"
+    )
 
     related = ctx.snapshot_related_outputs(
         action="stabilize_tooling",
@@ -470,7 +485,9 @@ def test_plan_and_execute_activates_reachable_covers_branches() -> None:
     graph.add_edge(GraphEdge.connect(left.id, sink.id, EdgeKind.ACTIVATES, weight=0.8))
     graph.add_edge(GraphEdge.connect(right.id, sink.id, EdgeKind.ACTIVATES, weight=0.75))
 
-    client = FakeTypedClient(responses=[_typed_success(), _typed_success(), _typed_success(), _typed_success()])
+    client = FakeTypedClient(
+        responses=[_typed_success(), _typed_success(), _typed_success(), _typed_success()]
+    )
     engine = ExecutionEngine(
         graph=graph,
         llm_client=client,
@@ -520,10 +537,14 @@ def test_execute_activates_parallel_records_collaboration_edges_for_successful_b
     assert len(results) == 3
     forward = None
     backward = None
-    for edge in graph.iter_edges_from(left.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False):
+    for edge in graph.iter_edges_from(
+        left.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False
+    ):
         if edge.target_id == right.id:
             forward = edge
-    for edge in graph.iter_edges_from(right.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False):
+    for edge in graph.iter_edges_from(
+        right.id, kinds=[EdgeKind.COLLABORATED_WITH], active_only=False
+    ):
         if edge.target_id == left.id:
             backward = edge
 
@@ -535,7 +556,9 @@ def test_execute_activates_parallel_records_collaboration_edges_for_successful_b
 
 def test_execute_synapse_tooling_runs_dynamic_module_without_llm() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        module_path = Path(tmp) / "connector_runtime.py"
+        gen_dir = Path(tmp) / "generated"
+        gen_dir.mkdir()
+        module_path = gen_dir / "connector_runtime.py"
         module_path.write_text(
             """from __future__ import annotations
 
@@ -576,7 +599,9 @@ def run(payload):
 
 def test_execute_synapse_tooling_receives_enriched_context_snapshot() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        module_path = Path(tmp) / "connector_runtime_context.py"
+        gen_dir = Path(tmp) / "generated"
+        gen_dir.mkdir()
+        module_path = gen_dir / "connector_runtime_context.py"
         module_path.write_text(
             """from __future__ import annotations
 
@@ -605,7 +630,13 @@ def run(payload):
         graph.add_node(synapse)
         engine = ExecutionEngine(graph=graph)
         ctx = StepContext()
-        ctx.write("syn_prev", {"status": "planned"}, action="decompose_work", agent_id="planner", channel="llm")
+        ctx.write(
+            "syn_prev",
+            {"status": "planned"},
+            action="decompose_work",
+            agent_id="planner",
+            channel="llm",
+        )
 
         result = engine.execute_synapse(synapse.id, request="executar ferramenta", context=ctx)
 
@@ -644,7 +675,9 @@ def test_execute_synapse_tooling_fails_when_module_missing() -> None:
 
 def test_downstream_llm_receives_structured_recent_tool_outputs() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        module_path = Path(tmp) / "connector_runtime.py"
+        gen_dir = Path(tmp) / "generated"
+        gen_dir.mkdir()
+        module_path = gen_dir / "connector_runtime.py"
         module_path.write_text(
             """from __future__ import annotations
 

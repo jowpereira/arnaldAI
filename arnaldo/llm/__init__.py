@@ -7,6 +7,7 @@ Public surface:
 - tier_for_task(): roteamento task → tier
 - GOD / EXPERT / FAST: constantes de tier
 """
+
 from __future__ import annotations
 
 from .config import (

@@ -33,12 +33,18 @@ class ToolForge:
         capabilities = []
         for item in missing:
             capability_id = item["id"]
-            result = self._forge_capability(capability_id, session_id, reason=item.get("reason", "missing_capability"))
+            result = self._forge_capability(
+                capability_id, session_id, reason=item.get("reason", "missing_capability")
+            )
             if result["status"] == "failed":
                 failed.append(result)
                 continue
             created.append(result)
-            capabilities.append(self._build_generated_capability(capability_id, result["module_path"], result["status"]))
+            capabilities.append(
+                self._build_generated_capability(
+                    capability_id, result["module_path"], result["status"]
+                )
+            )
 
         self._append_index(created + failed)
         return {
@@ -66,7 +72,9 @@ class ToolForge:
         if not test_result["ok"]:
             metadata["status"] = "failed"
             metadata["error"] = test_result["error"]
-            metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8"
+            )
             return metadata
 
         metadata["status"] = "draft"
@@ -74,7 +82,9 @@ class ToolForge:
         smoke_status = str(test_result.get("status", "")).strip()
         if smoke_status:
             metadata["smoke_status"] = smoke_status
-        metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8"
+        )
         return metadata
 
     def _smoke_test(self, module_path: Path) -> Dict[str, Any]:
@@ -108,7 +118,9 @@ class ToolForge:
         except Exception as exc:
             return {"ok": False, "error": "run_failed: %s" % exc}
 
-    def _build_generated_capability(self, capability_id: str, module_path: str, status: str) -> Capability:
+    def _build_generated_capability(
+        self, capability_id: str, module_path: str, status: str
+    ) -> Capability:
         return Capability(
             id=capability_id,
             name=f"Generated {capability_id}",
@@ -130,7 +142,9 @@ class ToolForge:
     def _append_index(self, entries: List[Dict[str, Any]]) -> None:
         current = json.loads(self.index_path.read_text(encoding="utf-8"))
         current.extend(entries)
-        self.index_path.write_text(json.dumps(current, indent=2, ensure_ascii=True), encoding="utf-8")
+        self.index_path.write_text(
+            json.dumps(current, indent=2, ensure_ascii=True), encoding="utf-8"
+        )
 
 
 def sanitize_module_name(capability_id: str) -> str:
@@ -139,26 +153,29 @@ def sanitize_module_name(capability_id: str) -> str:
 
 
 def render_scaffold(capability_id: str, created_at: str) -> str:
-    return """from __future__ import annotations
+    # Sanitiza inputs para prevenir injeção de código via string interpolation
+    safe_id = re.sub(r"[^a-zA-Z0-9_.\-]+", "_", capability_id.strip())
+    safe_ts = re.sub(r"[^a-zA-Z0-9_:+.\-]+", "_", created_at.strip())
+    return '''from __future__ import annotations
 
 from typing import Any, Dict
 
 TOOL_META = {
-    "capability_id": "%s",
-    "created_at": "%s",
+    "capability_id": %s,
+    "created_at": %s,
     "status": "draft",
 }
 
 
 def run(payload: Dict[str, Any]) -> Dict[str, Any]:
-    \"\"\"Connector scaffold. Replace this body with real integration logic.\"\"\"
+    """Connector scaffold. Replace this body with real integration logic."""
     return {
         "status": "not_implemented",
         "capability_id": TOOL_META["capability_id"],
         "received_keys": sorted(payload.keys()),
         "message": "scaffold gerado automaticamente; implemente a chamada real do conector",
     }
-""" % (
-        capability_id,
-        created_at,
+''' % (
+        repr(safe_id),
+        repr(safe_ts),
     )

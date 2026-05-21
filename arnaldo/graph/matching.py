@@ -1,36 +1,5 @@
-"""Retrieval híbrido: vector search + graph expansion + reranking.
+"""Retrieval híbrido: vector search + graph expansion + reranking."""
 
-**Padrão arquitetural:** ``VectorCypherRetriever`` (Neo4j, 2024) generalizado.
-
-Estágios formais::
-
-    ┌─────────┐  ┌────────────┐  ┌───────────────┐  ┌──────────┐
-    │  query  │→│ vector top-K│→│ graph expand   │→│  rerank  │
-    │  + intent│ │ entry nodes │ │ (k-hop, typed) │  │ + budget │
-    └─────────┘  └────────────┘  └───────────────┘  └──────────┘
-
-A escolha dos tipos de aresta na expansão depende da **intenção da query**.
-Mapping derivado de MAGMA (Jiang et al., 2026) com pequenas extensões:
-
-    intent      |  tipos priorizados
-    ────────────┼──────────────────────────────────────────────
-    "why"       |  CAUSAL, DERIVED_FROM
-    "when"      |  TEMPORAL_BEFORE
-    "what"      |  IS_A, PART_OF, MENTIONS
-    "who"       |  MENTIONS
-    "how"       |  ACTIVATES, REQUIRES, DERIVED_FROM
-    "summary"   |  PART_OF, IS_A (hierarquia)
-    default     |  SEMANTIC
-
-Benchmarks (Jiang et al., 2026):
-
-    Tipo query           | Vector  | Graph  | Hybrid
-    ─────────────────────┼─────────┼────────┼────────
-    Semântica simples    |   95%   |  80%   |   95%
-    Multi-entidade       |    0%   |  90%   |   92%
-    Multi-hop temporal   |   20%   |  95%   |   97%
-    Causal ("por quê?")  |   10%   |  85%   |   88%
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -40,6 +9,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .edges import EdgeKind
+from .intent import INTENT_TO_EDGES, classify_intent
+from .text_similarity import _normalize
 
 if TYPE_CHECKING:
     from .nodes import GraphNode
@@ -81,42 +52,8 @@ class MatchResult:
         )
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Mapping intent → edge kinds
-# ────────────────────────────────────────────────────────────────────────────
-
-
-INTENT_TO_EDGES: dict[str, tuple[EdgeKind, ...]] = {
-    "why": (EdgeKind.CAUSAL, EdgeKind.DERIVED_FROM),
-    "when": (EdgeKind.TEMPORAL_BEFORE,),
-    "what": (EdgeKind.IS_A, EdgeKind.PART_OF, EdgeKind.MENTIONS),
-    "who": (EdgeKind.MENTIONS,),
-    "how": (EdgeKind.ACTIVATES, EdgeKind.REQUIRES, EdgeKind.DERIVED_FROM),
-    "summary": (EdgeKind.PART_OF, EdgeKind.IS_A),
-    "default": (EdgeKind.SEMANTIC,),
-}
-
-
-def classify_intent(query: str) -> str:
-    """Classificador heurístico simples — palavras-chave em pt/en.
-
-    Em produção (Fase 2+), este classificador será substituído por chamada
-    ao tier FAST (gpt-5.4-nano) via ``llm.tier_for_task("query.classify_intent")``.
-    """
-    q = query.lower()
-    if any(w in q for w in ["por que", "porque", "why", "razão"]):
-        return "why"
-    if any(w in q for w in ["quando", "when", "data"]):
-        return "when"
-    if any(w in q for w in ["quem", "who"]):
-        return "who"
-    if any(w in q for w in ["como", "how", "passo"]):
-        return "how"
-    if any(w in q for w in ["o que é", "what is", "definição"]):
-        return "what"
-    if any(w in q for w in ["resumo", "summary", "panorama"]):
-        return "summary"
-    return "default"
+# Re-export para compatibilidade
+__all__ = ["HybridMatcher", "MatchResult", "INTENT_TO_EDGES", "classify_intent"]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -142,7 +79,7 @@ class HybridMatcher:
     gamma_plasticity: float = 0.30
     delta_hop_penalty: float = 0.05
 
-    top_k_entry: int = 5
+    top_k_entry: int = 10
     """Quantos entry nodes pegar via vector search."""
 
     max_hops: int = 2
@@ -151,8 +88,8 @@ class HybridMatcher:
     max_results: int = 25
     """Tamanho máximo do conjunto retornado."""
 
-    min_semantic_similarity: float = 0.30
-    """Threshold para entry nodes (descarta lixo)."""
+    min_semantic_similarity: float = 0.15
+    """Threshold para entry nodes."""
 
     # ── API principal ───────────────────────────────────────────────────
 
@@ -178,13 +115,11 @@ class HybridMatcher:
             Lista ordenada por ``score`` decrescente, limitada a ``max_results``.
         """
         # 1) Classifica intenção e seleciona tipos de aresta
-        effective_intent = intent or (
-            classify_intent(query) if query else "default"
-        )
+        effective_intent = intent or (classify_intent(query) if query else "default")
         edge_kinds = INTENT_TO_EDGES.get(effective_intent, INTENT_TO_EDGES["default"])
 
-        # 2) Vector search — entry nodes
-        entries = self._find_entry_nodes(graph, query_embedding)
+        # 2) Vector search — entry nodes (com fallback TF-IDF)
+        entries = self._find_entry_nodes(graph, query_embedding, query=query)
 
         # 3) Graph expansion — coleta candidatos
         candidates = self._expand_from_entries(graph, entries, edge_kinds)
@@ -193,9 +128,7 @@ class HybridMatcher:
         if node_kinds is not None:
             allowed = {str(k) for k in node_kinds}
             candidates = {
-                nid: cand
-                for nid, cand in candidates.items()
-                if cand["node"].kind.value in allowed
+                nid: cand for nid, cand in candidates.items() if cand["node"].kind.value in allowed
             }
 
         # 5) Score final + sort
@@ -209,14 +142,17 @@ class HybridMatcher:
         self,
         graph: CognitiveGraph,
         query_embedding: NDArray[np.float32] | None,
+        *,
+        query: str | None = None,
     ) -> list[tuple[GraphNode, float]]:
-        """Top-K nós por similaridade de cosseno com ``query_embedding``.
+        """Top-K nós por similaridade com a query.
 
-        Quando ``query_embedding`` é ``None``, retorna nós com maior peso
-        efetivo (fallback puramente sináptico — útil em runs iniciais sem
-        embeddings configurados).
+        Prioridade: embedding > TF-IDF > peso efetivo (fallback).
         """
         if query_embedding is None:
+            # TF-IDF fallback quando há texto de query
+            if query:
+                return self._find_by_tfidf(graph, query)
             ranked = [
                 (node, graph.plasticity.effective_weight(node))
                 for node in graph.iter_nodes()
@@ -235,6 +171,28 @@ class HybridMatcher:
                 scored.append((node, sim))
         scored.sort(key=lambda t: t[1], reverse=True)
         return scored[: self.top_k_entry]
+
+    def _find_by_tfidf(
+        self,
+        graph: CognitiveGraph,
+        query: str,
+    ) -> list[tuple[GraphNode, float]]:
+        """Fallback TF-IDF quando não há embeddings."""
+        from .text_similarity import node_searchable_text, tfidf_rank
+
+        nodes_by_id: dict[str, GraphNode] = {}
+        documents: list[tuple[str, str]] = []
+        for node in graph.iter_nodes():
+            if not node.is_active:
+                continue
+            text = node_searchable_text(node)
+            if text.strip():
+                nodes_by_id[node.id] = node
+                documents.append((node.id, text))
+        if not documents:
+            return []
+        ranked = tfidf_rank(query, documents, min_score=self.min_semantic_similarity)
+        return [(nodes_by_id[nid], score) for nid, score in ranked[: self.top_k_entry]]
 
     def _expand_from_entries(
         self,
@@ -272,9 +230,7 @@ class HybridMatcher:
         queue: list[tuple[str, int, list[str]]] = [(entry.id, 0, [])]
 
         # Sempre inclui o próprio entry
-        self._upsert_candidate(
-            candidates, entry, hop=0, path=[], semantic=entry_sim
-        )
+        self._upsert_candidate(candidates, entry, hop=0, path=[], semantic=entry_sim)
 
         while queue:
             node_id, hop, path = queue.pop(0)
@@ -352,11 +308,3 @@ class HybridMatcher:
             hop_distance=hop,
             path=path,
         )
-
-
-def _normalize(v: NDArray[np.float32]) -> NDArray[np.float32]:
-    """L2-normaliza um vetor (cosine similarity = dot product após normalização)."""
-    norm = float(np.linalg.norm(v))
-    if norm == 0:
-        return v
-    return (v / norm).astype(np.float32)

@@ -3,6 +3,7 @@
 Cada task cognitiva tem um tier alvo. Tasks de raciocínio profundo vão para GOD,
 tasks de síntese para EXPERT, tasks de extração para FAST, tasks de código para CODEX.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -25,7 +26,6 @@ TASK_TIER_MAP: Dict[str, str] = {
     "episteme.contradiction_resolve": GOD,
     "memory.consolidate_insight": GOD,
     "strategic.long_horizon_plan": GOD,
-
     # ─── EXPERT ───────────────────────────────────────────────────
     # Síntese e análise padrão, drafting de artefatos
     "intent.compile": EXPERT,
@@ -40,7 +40,6 @@ TASK_TIER_MAP: Dict[str, str] = {
     "memory.consolidate": EXPERT,
     "reality.gap_analyze": EXPERT,
     "episteme.entity_extract_rich": EXPERT,
-
     # ─── FAST ─────────────────────────────────────────────────────
     # Extração, formatação, classificação rápida
     "intent.extract_signals": FAST,
@@ -53,7 +52,6 @@ TASK_TIER_MAP: Dict[str, str] = {
     "format.summarize_brief": FAST,
     "episteme.query_classify_intent": FAST,
     "episteme.relevance_score": FAST,
-
     # ─── CODEX ────────────────────────────────────────────────────
     # Geração de código (com reasoning effort)
     "tool_forge.generate_connector": CODEX,

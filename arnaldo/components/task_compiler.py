@@ -8,7 +8,24 @@ from arnaldo.contracts import IntentIR, TaskIR, new_id, utc_now
 class TaskCompiler:
     """Builds a versioned Task IR without binding the system to a fixed subject area."""
 
-    def compile(self, intent: IntentIR) -> TaskIR:
+    def compile(self, intent: IntentIR, retrieval: Any = None) -> TaskIR:
+        # Enriquece contexto com retrieval quando disponível
+        context_enrichment: Dict[str, Any] = {}
+        if retrieval is not None and hasattr(retrieval, "has_context") and retrieval.has_context:
+            context_enrichment = {
+                "retrieved_memories": len(retrieval.relevant_memories),
+                "retrieved_synapses": len(retrieval.relevant_synapses),
+                "inhibited_synapses": retrieval.inhibited_synapses[:5],
+            }
+
+        task_context: Dict[str, Any] = {
+            "source": "cli",
+            "scope": "generic",
+            "original_request": intent.original_request,
+        }
+        if context_enrichment:
+            task_context["retrieval"] = context_enrichment
+
         return TaskIR(
             version="task-ir/v0",
             id=new_id("task"),
@@ -18,11 +35,7 @@ class TaskCompiler:
                 "statement": intent.desired_state,
                 "type": intent.primary_goal,
             },
-            context={
-                "source": "cli",
-                "scope": "generic",
-                "original_request": intent.original_request,
-            },
+            context=task_context,
             constraints=intent.constraints,
             deliverables=build_deliverables(intent),
             success_criteria=[
@@ -43,8 +56,7 @@ class TaskCompiler:
             risk=build_risk(intent.signals),
             capability_needs=build_capability_needs(),
             uncertainty=[
-                {"question": question, "blocking": False}
-                for question in intent.open_questions
+                {"question": question, "blocking": False} for question in intent.open_questions
             ],
         )
 
@@ -71,7 +83,9 @@ def build_deliverables(intent: IntentIR) -> List[Dict[str, Any]]:
 
 def build_risk(signals: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "execution_risk": score_to_level(max(signals["ambiguity_score"], signals["external_impact_score"])),
+        "execution_risk": score_to_level(
+            max(signals["ambiguity_score"], signals["external_impact_score"])
+        ),
         "data_sensitivity": score_to_level(signals["data_sensitivity_score"]),
         "reversibility": "low" if signals["irreversibility_score"] > 0 else "high",
     }

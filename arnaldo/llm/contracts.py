@@ -1,4 +1,5 @@
 """Registry canônico para modelos de contrato tipado."""
+
 from __future__ import annotations
 
 import dataclasses as dc
@@ -47,4 +48,3 @@ class ContractModelRegistry:
 
 
 DEFAULT_CONTRACT_REGISTRY = ContractModelRegistry()
-

@@ -3,6 +3,7 @@
 Este módulo materializa workflow como ``SynapseNode`` orquestrador com sub-grafo
 OWNED/SHARED, e permite composição workflow-of-workflows.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -150,10 +151,7 @@ def compose_workflows(
     - conecta workflows em cadeia via ``ACTIVATES``;
     - compartilha refs dos sub-grafos dos workflows filhos no orquestrador pai.
     """
-    workflow_nodes = [
-        graph.get_node(workflow_id)
-        for workflow_id in workflow_ids
-    ]
+    workflow_nodes = [graph.get_node(workflow_id) for workflow_id in workflow_ids]
     workflows = [node for node in workflow_nodes if isinstance(node, SynapseNode)]
     if len(workflows) < 2:
         raise ValueError("compose_workflows exige pelo menos 2 workflows válidos")
@@ -234,4 +232,3 @@ def _slug(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower())
     cleaned = cleaned.strip("_")
     return cleaned or "step"
-

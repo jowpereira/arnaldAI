@@ -34,6 +34,7 @@ E o grafo total é a união disjunta dos sub-grafos por tipo::
 
     G    = ⋃_{k ∈ EdgeKind} G_k, com G_k = ⟨V, {e ∈ E | τ(e) = k}⟩
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -180,9 +181,7 @@ class GraphEdge:
     kind: EdgeKind
     weight: float = 0.5
     bitemp: BiTemporal = field(default_factory=BiTemporal.now)
-    source: SourceRecord = field(
-        default_factory=lambda: SourceRecord.from_bootstrap("graph/edge")
-    )
+    source: SourceRecord = field(default_factory=lambda: SourceRecord.from_bootstrap("graph/edge"))
     payload: dict[str, Any] = field(default_factory=dict)
 
     # Contadores (subset menor que NodeStats — arestas são mais simples)
@@ -196,9 +195,7 @@ class GraphEdge:
             raise ValueError(f"weight deve ∈ [0,1], recebido {self.weight}")
         if self.source_id == self.target_id and self.kind != EdgeKind.SEMANTIC:
             # Self-loops permitidos apenas em SEMANTIC (auto-similaridade)
-            raise ValueError(
-                f"Self-loop em aresta {self.kind} (source={self.source_id})"
-            )
+            raise ValueError(f"Self-loop em aresta {self.kind} (source={self.source_id})")
 
     # ── Construtor canônico ──────────────────────────────────────────────
 
@@ -256,15 +253,13 @@ class GraphEdge:
 
     @property
     def success_rate(self) -> float:
-        total = self.successes + self.failures
-        if total == 0:
-            return 0.5
-        return (self.successes + 1) / (total + 2)
+        from .plasticity import laplace_success_rate
+
+        return laplace_success_rate(self.successes, self.failures)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"<GraphEdge {self.kind.value} {self.source_id}→{self.target_id} "
-            f"w={self.weight:.2f}>"
+            f"<GraphEdge {self.kind.value} {self.source_id}→{self.target_id} w={self.weight:.2f}>"
         )
 
 

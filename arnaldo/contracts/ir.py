@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 import uuid
 
+from arnaldo.utils.time import utc_now_iso
+
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now_iso()
 
 
 def new_id(prefix: str) -> str:
@@ -153,3 +154,4 @@ class RunResult:
     run_dir: Path
     files: Dict[str, Path]
     session_id: str | None = None
+    response: str = ""

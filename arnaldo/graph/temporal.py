@@ -33,16 +33,14 @@ diretor") destroem informação em vez de coexistirem com janelas distintas.
                           aprendeu          esqueceu/sobreescreveu
 ```
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Self
 
-
-def utc_now() -> datetime:
-    """Timestamp UTC com tz-aware. Único timezone reference do sistema."""
-    return datetime.now(timezone.utc)
+from arnaldo.utils.time import utc_now  # noqa: F401 — re-export canônico
 
 
 @dataclass(frozen=True, slots=True)

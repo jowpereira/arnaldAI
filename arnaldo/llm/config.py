@@ -1,4 +1,5 @@
 """Configuration loader for Azure OpenAI tiers (stdlib only)."""
+
 from __future__ import annotations
 
 import os
@@ -8,15 +9,15 @@ from typing import Dict, Optional
 
 
 # Constantes de tier
-GOD = "god"        # gpt-5-pro     — raciocínio profundo
+GOD = "god"  # gpt-5-pro     — raciocínio profundo
 EXPERT = "expert"  # gpt-5         — síntese e análise
-FAST = "fast"      # gpt-5.4-nano  — extração e formatação
-CODEX = "codex"    # gpt-5.3-codex — geração de código (com reasoning effort)
+FAST = "fast"  # gpt-5.4-nano  — extração e formatação
+CODEX = "codex"  # gpt-5.3-codex — geração de código (com reasoning effort)
 
 # Estilos de API Azure OpenAI
 API_STYLE_DEPLOYMENTS = "deployments"  # URL: /openai/deployments/<name>/chat/completions
-API_STYLE_V1 = "v1"                    # URL: <base>/chat/completions, model no body
-API_STYLE_RESPONSES = "responses"      # URL: <base>/responses (Responses API com reasoning)
+API_STYLE_V1 = "v1"  # URL: <base>/chat/completions, model no body
+API_STYLE_RESPONSES = "responses"  # URL: <base>/responses (Responses API com reasoning)
 
 
 def _load_dotenv(path: Path = Path(".env"), override: bool = True) -> None:
@@ -82,7 +83,9 @@ class TierConfig:
     supports_reasoning: bool = False
     default_reasoning_effort: Optional[str] = None  # "low" | "medium" | "high" | "xhigh"
     default_reasoning_summary: Optional[str] = None  # "auto" | "concise" | "detailed"
-    uses_max_completion_tokens: bool = False  # gpt-5 series usa max_completion_tokens, não max_tokens
+    uses_max_completion_tokens: bool = (
+        False  # gpt-5 series usa max_completion_tokens, não max_tokens
+    )
 
 
 @dataclass(frozen=True)

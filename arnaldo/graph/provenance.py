@@ -24,6 +24,7 @@ Loizou & Marriot, 2017; Schreiber et al., 2024):
 * **Bootstrap**           — codificada em design (capabilities default,
   ontologia inicial).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -114,9 +115,7 @@ class SourceRecord:
         if self.confidence < 0:
             object.__setattr__(self, "confidence", self.kind.baseline_confidence)
         if not 0.0 <= self.confidence <= 1.0:
-            raise ValueError(
-                f"confidence deve ∈ [0,1], recebido {self.confidence}"
-            )
+            raise ValueError(f"confidence deve ∈ [0,1], recebido {self.confidence}")
         if not self.identifier:
             raise ValueError("identifier não pode ser vazio")
 

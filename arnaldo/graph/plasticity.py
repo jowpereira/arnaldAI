@@ -41,6 +41,7 @@ indexada por ``domain``.
 
 A composição final: ``effective_weight(t) = base_weight · decay(t) · reputation``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -54,6 +55,22 @@ from .temporal import utc_now
 if TYPE_CHECKING:
     from .edges import GraphEdge
     from .nodes import GraphNode
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Funções estatísticas compartilhadas
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def laplace_success_rate(successes: int, failures: int) -> float:
+    """Razão de sucesso com Laplace smoothing — (s+1)/(s+f+2).
+
+    Evita divisão por zero e dá prior neutro (0.5) quando sem dados.
+    """
+    total = successes + failures
+    if total == 0:
+        return 0.5
+    return (successes + 1) / (total + 2)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -198,9 +215,7 @@ class PlasticityEngine:
 
     # ── Pesos efetivos ────────────────────────────────────────────────────
 
-    def effective_weight(
-        self, node: GraphNode, *, at: datetime | None = None
-    ) -> float:
+    def effective_weight(self, node: GraphNode, *, at: datetime | None = None) -> float:
         """Calcula o peso efetivo do nó no instante ``at`` (default = agora).
 
         Composição multiplicativa de três fatores ∈ [0,1] → resultado ∈ [0,1].
@@ -214,9 +229,7 @@ class PlasticityEngine:
         prov = node.source.confidence
         return float(node.weight * decay * prov)
 
-    def effective_edge_weight(
-        self, edge: GraphEdge, *, at: datetime | None = None
-    ) -> float:
+    def effective_edge_weight(self, edge: GraphEdge, *, at: datetime | None = None) -> float:
         """Análogo para arestas. Usa domínio sintético baseado no tipo."""
         now = at or utc_now()
         ref = edge.last_activated_at or edge.bitemp.window.valid_from
@@ -227,9 +240,7 @@ class PlasticityEngine:
 
     # ── Atualização Hebbian após uma run ─────────────────────────────────
 
-    def update_node(
-        self, node: GraphNode, *, success: bool
-    ) -> GraphNode:
+    def update_node(self, node: GraphNode, *, success: bool) -> GraphNode:
         """Aplica Hebbian update após registrar outcome. Retorna nó atualizado.
 
         Pipeline::
@@ -252,9 +263,7 @@ class PlasticityEngine:
 
     # ── Classificação por estado ─────────────────────────────────────────
 
-    def classify_status(
-        self, node: GraphNode, *, at: datetime | None = None
-    ) -> str:
+    def classify_status(self, node: GraphNode, *, at: datetime | None = None) -> str:
         """Retorna ciclo-de-vida sugerido baseado no peso efetivo.
 
         Não muta o nó — apenas sugere. O ``CognitiveGraph`` é quem aplica.

@@ -1,4 +1,5 @@
 """Utilities para structured outputs (dataclass ↔ JSON Schema strict)."""
+
 from __future__ import annotations
 
 import dataclasses as dc
@@ -291,4 +292,3 @@ def _allows_none(tp: Any) -> bool:
     if origin in (t.Union, types.UnionType):
         return any(arg is type(None) for arg in get_args(tp))
     return False
-

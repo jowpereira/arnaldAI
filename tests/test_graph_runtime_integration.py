@@ -12,6 +12,8 @@ from typing import get_origin
 from arnaldo.components import CapabilityRegistry, ToolForge
 from arnaldo.graph import CapabilityNode, CognitiveGraph, EdgeKind, GraphEdge, NodeKind, SynapseNode
 from arnaldo.kernel import ArnaldoKernel
+from arnaldo.kernel.agents import build_graph_native_agents
+from arnaldo.kernel.graph_ops import sync_capabilities_from_graph
 from arnaldo.llm.structured import TypedResponse
 from arnaldo.memory import MemoryStore
 from arnaldo.proactivity import ProactivityManager
@@ -51,6 +53,11 @@ class RefusalClient:
             retries=0,
         )
 
+    def chat(self, tier: str = "fast", messages: list | None = None, **kw: Any) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(content="ok")
+
 
 class AlwaysSuccessClient:
     is_configured = True
@@ -65,6 +72,11 @@ class AlwaysSuccessClient:
             schema_used={},
             retries=0,
         )
+
+    def chat(self, tier: str = "fast", messages: list | None = None, **kw: Any) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(content="ok")
 
 
 class CaptureMessagesClient:
@@ -86,6 +98,14 @@ class CaptureMessagesClient:
             schema_used={},
             retries=0,
         )
+
+    def chat(self, tier: str = "fast", messages: list | None = None, **kwargs: Any) -> Any:
+        from types import SimpleNamespace
+
+        msgs = messages or []
+        if msgs:
+            self.user_messages.append(str(msgs[-1].get("content", "")))
+        return SimpleNamespace(content="ok")
 
 
 class GraphRuntimeIntegrationTest(unittest.TestCase):
@@ -160,7 +180,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["tier_preference"], "fast")
         self.assertEqual(workflow[0]["max_tokens"], 320)
 
-    def test_graph_runtime_materializes_lightweight_workflow_for_greeting_prefix_in_context(self) -> None:
+    def test_graph_runtime_materializes_lightweight_workflow_for_greeting_prefix_in_context(
+        self,
+    ) -> None:
         runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
         organization = SimpleNamespace(
             topology="pipeline_with_critic",
@@ -259,7 +281,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["max_retries"], 0)
         self.assertEqual(workflow[0]["retry_attempts"], 1)
 
-    def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(self) -> None:
+    def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(
+        self,
+    ) -> None:
         runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
         organization = SimpleNamespace(
             topology="minimal_pipeline",
@@ -330,7 +354,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
 
-            seed_kernel = self._build_kernel(base, runtime=GraphRuntime(llm_client=AlwaysSuccessClient()))
+            seed_kernel = self._build_kernel(
+                base, runtime=GraphRuntime(llm_client=AlwaysSuccessClient())
+            )
             first = seed_kernel.run(
                 "Planeje execução inicial com alternativas e revisão",
                 output_dir=base / "runs",
@@ -338,7 +364,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             )
 
             capture_client = CaptureMessagesClient()
-            replay_kernel = self._build_kernel(base, runtime=GraphRuntime(llm_client=capture_client))
+            replay_kernel = self._build_kernel(
+                base, runtime=GraphRuntime(llm_client=capture_client)
+            )
             second = replay_kernel.run(
                 "Continue e refine o plano com base no histórico",
                 output_dir=base / "runs",
@@ -354,12 +382,16 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 if line.strip()
             ]
             bootstrap_events = [
-                item for item in trace_lines if item.get("event_type") == "graph_context_bootstrapped"
+                item
+                for item in trace_lines
+                if item.get("event_type") == "graph_context_bootstrapped"
             ]
             self.assertGreaterEqual(len(bootstrap_events), 1)
             payload = bootstrap_events[-1]["payload"]
             self.assertGreaterEqual(int(payload["loaded_synapses"]), 1)
-            self.assertGreaterEqual(int(payload["context_version"]), int(payload["loaded_synapses"]))
+            self.assertGreaterEqual(
+                int(payload["context_version"]), int(payload["loaded_synapses"])
+            )
             self.assertIn("loaded_tool_context", payload)
 
     def test_graph_native_agents_scope_toolsmith_by_capability(self) -> None:
@@ -381,7 +413,7 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 "degraded": [{"id": "tool.dynamic.build"}],
             }
 
-            agents = kernel._build_graph_native_agents(  # pylint: disable=protected-access
+            agents = build_graph_native_agents(
                 "minimal_pipeline",
                 task,
                 capability_resolution,
@@ -410,7 +442,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 for line in result.files["trace"].read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            planned_events = [item for item in trace_lines if item.get("event_type") == "graph_execution_planned"]
+            planned_events = [
+                item for item in trace_lines if item.get("event_type") == "graph_execution_planned"
+            ]
             self.assertGreaterEqual(len(planned_events), 1)
             planned_mode = planned_events[-1]["payload"]["mode"]
             expected_mode = (
@@ -468,7 +502,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 for line in result.files["trace"].read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            prompt_events = [item for item in trace_lines if item.get("event_type") == "prompt_prepared"]
+            prompt_events = [
+                item for item in trace_lines if item.get("event_type") == "prompt_prepared"
+            ]
             self.assertGreaterEqual(len(prompt_events), 1)
 
     def test_graph_runtime_ignores_legacy_seed_synapses_outside_current_workflow(self) -> None:
@@ -510,7 +546,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 for line in second.files["trace"].read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            orphan_events = [item for item in trace_lines if item.get("event_type") == "orphan_synapse_skipped"]
+            orphan_events = [
+                item for item in trace_lines if item.get("event_type") == "orphan_synapse_skipped"
+            ]
             self.assertEqual(orphan_events, [])
 
     def test_sync_capabilities_ignores_null_module_path(self) -> None:
@@ -536,7 +574,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 terms_accepted=False,
             )
             store = RunStore(base / "runs", "run_sync_modpath").create()
-            report, _ = kernel._sync_capabilities_from_graph(  # pylint: disable=protected-access
+            report, _ = sync_capabilities_from_graph(
+                kernel.capabilities,
+                kernel.sessions,
                 graph_path,
                 session=session,
                 run_id="run_sync_modpath",
@@ -549,7 +589,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             self.assertIn("connector.custom", synced)
             self.assertNotIn("module_path", synced["connector.custom"])
 
-            registry_payload = json.loads((base / "capability_registry.json").read_text(encoding="utf-8"))
+            registry_payload = json.loads(
+                (base / "capability_registry.json").read_text(encoding="utf-8")
+            )
             custom = next(item for item in registry_payload if item["id"] == "connector.custom")
             self.assertNotIn("module_path", custom["policies"])
 
@@ -579,7 +621,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 terms_accepted=False,
             )
             store = RunStore(base / "runs", "run_sync_signals").create()
-            report, _ = kernel._sync_capabilities_from_graph(  # pylint: disable=protected-access
+            report, _ = sync_capabilities_from_graph(
+                kernel.capabilities,
+                kernel.sessions,
                 graph_path,
                 session=session,
                 run_id="run_sync_signals",
@@ -594,7 +638,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             self.assertEqual(runtime_item["last_tool_execution_status"], "executed")
             self.assertEqual(runtime_item["health"], "stable")
 
-            registry_payload = json.loads((base / "capability_registry.json").read_text(encoding="utf-8"))
+            registry_payload = json.loads(
+                (base / "capability_registry.json").read_text(encoding="utf-8")
+            )
             runtime = next(item for item in registry_payload if item["id"] == "connector.runtime")
             self.assertEqual(runtime["policies"]["real_execution_successes"], 7)
             self.assertEqual(runtime["policies"]["last_tool_execution_status"], "executed")
@@ -666,7 +712,11 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
     def test_build_request_for_conversational_cli_turn_uses_direct_chat_contract(self) -> None:
         task = SimpleNamespace(
             goal={"statement": "responder de forma clara", "type": "open_ended_execution"},
-            context={"source": "cli", "raw_request": "legal e vc quem e", "session_user_name": "Jonathan"},
+            context={
+                "source": "cli",
+                "raw_request": "legal e vc quem e",
+                "session_user_name": "Jonathan",
+            },
             deliverables=[{"id": "primary_artifact"}],
             capability_needs=[{"id": "artifact.draft"}],
             uncertainty=[],
@@ -688,18 +738,21 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             kernel = self._build_kernel(base)
 
             kernel.run(
-                "meu nome e jonathan",
+                "Quero configurar meu perfil, meu nome e jonathan e preciso que fique registrado",
                 output_dir=base / "runs",
                 session_id="sessao_nome",
             )
             second = kernel.run(
-                "quem sou eu?",
+                "Agora analise quem sou eu e crie um resumo do perfil completo",
                 output_dir=base / "runs",
                 session_id="sessao_nome",
             )
 
             task_ir = json.loads(second.files["task_ir"].read_text(encoding="utf-8"))
-            self.assertEqual(task_ir["context"]["raw_request"], "quem sou eu?")
+            self.assertEqual(
+                task_ir["context"]["raw_request"],
+                "Agora analise quem sou eu e crie um resumo do perfil completo",
+            )
             self.assertEqual(task_ir["context"]["session_user_name"], "Jonathan")
 
     def test_kernel_schedules_proactive_messages_after_non_lightweight_turn(self) -> None:
@@ -715,7 +768,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             self.assertEqual(result.session_id, "sessao_proativa")
             self.assertGreaterEqual(kernel.pending_proactive_count("sessao_proativa"), 1)
 
-    def test_graph_runtime_promotes_degraded_capability_after_successful_stabilization(self) -> None:
+    def test_graph_runtime_promotes_degraded_capability_after_successful_stabilization(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
@@ -746,11 +801,15 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 session_id="sessao_cap_sync",
             )
             self.assertIn("graph_capability_sync", first.files)
-            sync_report = json.loads(first.files["graph_capability_sync"].read_text(encoding="utf-8"))
+            sync_report = json.loads(
+                first.files["graph_capability_sync"].read_text(encoding="utf-8")
+            )
             synced_ids = {item["id"] for item in sync_report["synced"]}
             self.assertIn("connector.github", synced_ids)
 
-            registry_payload = json.loads((base / "capability_registry.json").read_text(encoding="utf-8"))
+            registry_payload = json.loads(
+                (base / "capability_registry.json").read_text(encoding="utf-8")
+            )
             registry_ids = {item["id"] for item in registry_payload}
             self.assertIn("connector.github", registry_ids)
 
@@ -760,7 +819,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 output_dir=base / "runs",
                 session_id=first.session_id,
             )
-            resolution = json.loads(second.files["capability_resolution"].read_text(encoding="utf-8"))
+            resolution = json.loads(
+                second.files["capability_resolution"].read_text(encoding="utf-8")
+            )
             available_ids = {item["id"] for item in resolution["available"]}
             degraded_ids = {item["id"] for item in resolution["degraded"]}
             self.assertNotIn("connector.github", available_ids)
@@ -803,7 +864,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 session_id=first.session_id,
             )
             if "graph_tool_forge" in second.files:
-                second_report = json.loads(second.files["graph_tool_forge"].read_text(encoding="utf-8"))
+                second_report = json.loads(
+                    second.files["graph_tool_forge"].read_text(encoding="utf-8")
+                )
                 self.assertEqual(len(second_report["created"]), 0)
 
             evidence_lines = [

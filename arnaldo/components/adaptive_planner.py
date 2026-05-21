@@ -64,7 +64,9 @@ class AdaptivePlanner:
                 "reason": hint.get("reason", "adaptive_hint"),
             }
             if capability_id in merged:
-                merged[capability_id]["required"] = merged[capability_id].get("required", False) or payload["required"]
+                merged[capability_id]["required"] = (
+                    merged[capability_id].get("required", False) or payload["required"]
+                )
                 if payload.get("reason"):
                     merged[capability_id]["reason"] = payload["reason"]
             else:
@@ -158,7 +160,10 @@ def infer_capability_hints(text: str) -> List[Dict[str, Any]]:
                 "reason": "pedido_cita_crm",
             }
         )
-    if any(term in lowered for term in ["ferramenta", "tool", "desenvolve ferramenta", "cria ferramenta"]):
+    if any(
+        term in lowered
+        for term in ["ferramenta", "tool", "desenvolve ferramenta", "cria ferramenta"]
+    ):
         hints.append(
             {
                 "id": "tool.dynamic.build",
@@ -179,7 +184,9 @@ def infer_capability_hints(text: str) -> List[Dict[str, Any]]:
 
 def compose_turn_request(text: str, session: SessionState, inferred_objectives: List[str]) -> str:
     context = [text]
-    active = [item["statement"] for item in session.active_objectives if item.get("status") == "active"]
+    active = [
+        item["statement"] for item in session.active_objectives if item.get("status") == "active"
+    ]
     if active:
         context.append("contexto_objetivos_ativos: " + " | ".join(active[:3]))
     if inferred_objectives:
@@ -189,11 +196,21 @@ def compose_turn_request(text: str, session: SessionState, inferred_objectives: 
     return "\n".join(context)
 
 
-def build_priority_actions(inferred_objectives: List[str], should_forge_tools: bool) -> List[Dict[str, Any]]:
+def build_priority_actions(
+    inferred_objectives: List[str], should_forge_tools: bool
+) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = [
-        {"id": "sync_objectives", "description": "sincronizar objetivos ativos da sessao", "priority": 1},
+        {
+            "id": "sync_objectives",
+            "description": "sincronizar objetivos ativos da sessao",
+            "priority": 1,
+        },
         {"id": "execute_turn", "description": "compilar e executar pedido do turno", "priority": 2},
-        {"id": "learn", "description": "atualizar preferencias e memoria procedural", "priority": 4},
+        {
+            "id": "learn",
+            "description": "atualizar preferencias e memoria procedural",
+            "priority": 4,
+        },
     ]
     if inferred_objectives:
         actions.append(
@@ -217,7 +234,10 @@ def build_priority_actions(inferred_objectives: List[str], should_forge_tools: b
 
 def should_forge(text: str, capability_hints: List[Dict[str, Any]], session: SessionState) -> bool:
     lowered = text.lower()
-    if any(term in lowered for term in ["crie ferramenta", "desenvolve ferramenta", "conector", "integra"]):
+    if any(
+        term in lowered
+        for term in ["crie ferramenta", "desenvolve ferramenta", "conector", "integra"]
+    ):
         return True
     if capability_hints:
         return True
@@ -243,5 +263,7 @@ def dedupe_hints(hints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if capability_id not in merged:
             merged[capability_id] = dict(hint)
             continue
-        merged[capability_id]["required"] = merged[capability_id].get("required", False) or bool(hint.get("required", False))
+        merged[capability_id]["required"] = merged[capability_id].get("required", False) or bool(
+            hint.get("required", False)
+        )
     return list(merged.values())

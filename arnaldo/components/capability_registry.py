@@ -18,7 +18,9 @@ class CapabilityRegistry:
         base = capabilities if capabilities is not None else default_capabilities()
         self.registry_path = Path(registry_path)
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        self._capabilities: Dict[str, Capability] = {capability.id: capability for capability in base}
+        self._capabilities: Dict[str, Capability] = {
+            capability.id: capability for capability in base
+        }
         self._default_ids = set(self._capabilities.keys())
         self._load_dynamic_capabilities()
 
@@ -102,12 +104,22 @@ class CapabilityRegistry:
 
 def default_capabilities() -> List[Capability]:
     return [
-        capability("intent.structure", "Structure Intent", "transformar pedido humano em contrato declarativo"),
+        capability(
+            "intent.structure",
+            "Structure Intent",
+            "transformar pedido humano em contrato declarativo",
+        ),
         capability("work.decompose", "Decompose Work", "quebrar trabalho em passos verificaveis"),
-        capability("organization.generate", "Generate Organization", "criar organizacao temporaria generica"),
+        capability(
+            "organization.generate",
+            "Generate Organization",
+            "criar organizacao temporaria generica",
+        ),
         capability("artifact.draft", "Draft Artifact", "gerar artefato textual inicial"),
         capability("validation.critic_review", "Critic Review", "apontar lacunas e riscos"),
-        capability("evidence.record", "Record Evidence", "registrar eventos e decisoes em ledger local"),
+        capability(
+            "evidence.record", "Record Evidence", "registrar eventos e decisoes em ledger local"
+        ),
     ]
 
 

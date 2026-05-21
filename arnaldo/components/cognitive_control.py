@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from arnaldo.contracts import CognitiveDecision, TaskIR, new_id
 
@@ -8,13 +8,19 @@ from arnaldo.contracts import CognitiveDecision, TaskIR, new_id
 class CognitiveControlPlane:
     """Chooses how the system should think before choosing who acts."""
 
-    def decide(self, task: TaskIR) -> CognitiveDecision:
+    def decide(self, task: TaskIR, retrieval: Any = None) -> CognitiveDecision:
         ambiguity = task.risk["execution_risk"]
         sensitivity = task.risk["data_sensitivity"]
         reversibility = task.risk["reversibility"]
         external_impact = "medium" if task.autonomy["max_level"] >= 3 else "low"
 
         selected_modes = select_modes(ambiguity, sensitivity, reversibility)
+
+        # Se retrieval indica synapses inibidos, adiciona revisão adversarial
+        if retrieval is not None and hasattr(retrieval, "inhibited_synapses"):
+            if retrieval.inhibited_synapses and "adversarial_review" not in selected_modes:
+                selected_modes.append("adversarial_review")
+
         return CognitiveDecision(
             version="cognitive-decision/v0",
             id=new_id("cog"),

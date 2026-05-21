@@ -3,7 +3,14 @@ from __future__ import annotations
 from typing import Any, Dict, List
 import re
 
-from arnaldo.contracts import AgentGenome, CognitiveDecision, OrganizationIR, TaskIR, new_id, utc_now
+from arnaldo.contracts import (
+    AgentGenome,
+    CognitiveDecision,
+    OrganizationIR,
+    TaskIR,
+    new_id,
+    utc_now,
+)
 
 
 class OrganizationGenerator:
@@ -68,8 +75,7 @@ def build_agents(
     execution_risk = str(task.risk.get("execution_risk", "low"))
     missing = capability_resolution.get("missing", []) or []
     has_tooling_gap = any(
-        item.get("id", "").startswith(("connector.", "tool."))
-        for item in missing
+        item.get("id", "").startswith(("connector.", "tool.")) for item in missing
     )
 
     if uncertainty_count >= 2 and not _has_agent(agents, "clarifier"):
@@ -182,7 +188,10 @@ def build_workflow(
         workflow.append(step("risk_review", "risk_auditor", "risk_report"))
 
     # Se tarefa pede avaliação/análise, adiciona estágio extra de síntese crítica.
-    if task.goal.get("type") in {"analyze_or_evaluate", "decide_or_compare"} and "critic" in agent_ids:
+    if (
+        task.goal.get("type") in {"analyze_or_evaluate", "decide_or_compare"}
+        and "critic" in agent_ids
+    ):
         workflow.append(step("decision_synthesis", "critic", "decision_brief"))
 
     return workflow

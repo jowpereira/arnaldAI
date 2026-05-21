@@ -4,8 +4,7 @@ from pathlib import Path
 import tempfile
 
 from arnaldo.graph import EdgeKind, NodeKind, SynapseNode
-from arnaldo.memory import MemoryRecord, MemoryStore
-from arnaldo.memory.store import MemorySynapseCandidate
+from arnaldo.memory import MemoryRecord, MemoryStore, MemorySynapseCandidate
 
 
 def _read_jsonl(path: Path) -> list[str]:

@@ -75,3 +75,12 @@ class AlwaysSuccessTypedClient:
         )
         payload = payload_for_model(response_model)
         return SimpleNamespace(parsed=response_model(**payload), refusal=None)
+
+    def chat(
+        self,
+        tier: str = "fast",
+        messages: list[dict[str, str]] | None = None,
+        **kwargs: Any,
+    ) -> SimpleNamespace:
+        self.calls.append({"tier": tier, "messages": messages or [], "kwargs": kwargs})
+        return SimpleNamespace(content="ok")

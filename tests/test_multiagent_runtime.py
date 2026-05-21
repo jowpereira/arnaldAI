@@ -41,9 +41,7 @@ def _build_context(*, run_id: str, workflow: list[dict[str, str]]) -> RuntimeCon
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
     return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
@@ -52,10 +50,30 @@ def test_multiagent_runtime_executes_parallel_exploration_wave_and_records_bus()
         base = Path(tmp)
         runtime = MultiAgentRuntime()
         workflow = [
-            {"id": "step_1", "agent_id": "framer", "action": "frame_intent", "output": "intent_frame"},
-            {"id": "step_2", "agent_id": "explorer_a", "action": "explore_path_a", "output": "work_option_a"},
-            {"id": "step_3", "agent_id": "explorer_b", "action": "explore_path_b", "output": "work_option_b"},
-            {"id": "step_4", "agent_id": "synthesizer", "action": "synthesize_artifact", "output": "primary_artifact"},
+            {
+                "id": "step_1",
+                "agent_id": "framer",
+                "action": "frame_intent",
+                "output": "intent_frame",
+            },
+            {
+                "id": "step_2",
+                "agent_id": "explorer_a",
+                "action": "explore_path_a",
+                "output": "work_option_a",
+            },
+            {
+                "id": "step_3",
+                "agent_id": "explorer_b",
+                "action": "explore_path_b",
+                "output": "work_option_b",
+            },
+            {
+                "id": "step_4",
+                "agent_id": "synthesizer",
+                "action": "synthesize_artifact",
+                "output": "primary_artifact",
+            },
         ]
         context = _build_context(run_id="run_multiagent_parallel", workflow=workflow)
         store = RunStore(base / "runs", context.run_id).create()
@@ -67,9 +85,7 @@ def test_multiagent_runtime_executes_parallel_exploration_wave_and_records_bus()
         assert len(bus_events) == 8
         started = [event for event in bus_events if event.get("event") == "agent_step_started"]
         explore_starts = [
-            event
-            for event in started
-            if str(event.get("action", "")).startswith("explore_path_")
+            event for event in started if str(event.get("action", "")).startswith("explore_path_")
         ]
         assert len(explore_starts) == 2
         assert len({int(event.get("wave_index", 0)) for event in explore_starts}) == 1
@@ -78,7 +94,9 @@ def test_multiagent_runtime_executes_parallel_exploration_wave_and_records_bus()
 def test_multiagent_runtime_executes_dynamic_tooling_module() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
-        module_path = base / "connector_runtime.py"
+        gen_dir = base / "generated"
+        gen_dir.mkdir()
+        module_path = gen_dir / "connector_runtime.py"
         module_path.write_text(
             """from __future__ import annotations
 
@@ -95,7 +113,12 @@ def run(payload):
 
         runtime = MultiAgentRuntime()
         workflow = [
-            {"id": "step_1", "agent_id": "framer", "action": "frame_intent", "output": "intent_frame"},
+            {
+                "id": "step_1",
+                "agent_id": "framer",
+                "action": "frame_intent",
+                "output": "intent_frame",
+            },
             {
                 "id": "step_2",
                 "agent_id": "toolrunner_connector_runtime",

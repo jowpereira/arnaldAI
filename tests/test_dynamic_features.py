@@ -16,6 +16,7 @@ from arnaldo.components import (
 )
 from arnaldo.graph import CapabilityNode, CognitiveGraph, EdgeKind, NodeKind, SynapseNode
 from arnaldo.kernel import ArnaldoKernel
+from arnaldo.kernel.session import collect_forge_targets
 from arnaldo.memory import MemoryStore
 from arnaldo.runtime import GraphRuntime, SandboxManager
 from arnaldo.session import SessionManager
@@ -90,14 +91,18 @@ class DynamicFeatureTest(unittest.TestCase):
             self.assertEqual(resolution["missing"], [])
             degraded_ids = {item["id"] for item in resolution["degraded"]}
             self.assertIn("connector.github", degraded_ids)
-            degraded_item = next(item for item in resolution["degraded"] if item["id"] == "connector.github")
+            degraded_item = next(
+                item for item in resolution["degraded"] if item["id"] == "connector.github"
+            )
             self.assertEqual(degraded_item["reason"], "optional_capability_not_registered")
 
     def test_kernel_collects_forge_targets_from_missing_and_optional_degraded(self) -> None:
-        targets = ArnaldoKernel._collect_forge_targets(  # pylint: disable=protected-access
+        targets = collect_forge_targets(
             {
                 "available": [],
-                "missing": [{"id": "connector.http.generic", "reason": "capability_not_registered"}],
+                "missing": [
+                    {"id": "connector.http.generic", "reason": "capability_not_registered"}
+                ],
                 "degraded": [
                     {"id": "connector.github", "reason": "optional_capability_not_registered"},
                     {"id": "tool.dynamic.build", "reason": "health_degraded"},
@@ -143,20 +148,17 @@ class DynamicFeatureTest(unittest.TestCase):
         )
 
         tooling_nodes = [
-            node_id
-            for node_id in path
-            if step_by_node[node_id]["action"] == "design_tooling"
+            node_id for node_id in path if step_by_node[node_id]["action"] == "design_tooling"
         ]
-        tooling_agent_ids = {
-            step_by_node[node_id]["agent_id"]
-            for node_id in tooling_nodes
-        }
+        tooling_agent_ids = {step_by_node[node_id]["agent_id"] for node_id in tooling_nodes}
         self.assertGreaterEqual(len(tooling_nodes), 2)
         self.assertEqual(len(tooling_nodes), len(set(tooling_nodes)))
         self.assertIn("toolsmith_connector_crm", tooling_agent_ids)
         self.assertIn("toolsmith_connector_github", tooling_agent_ids)
         synapses = list(graph.iter_nodes(kind=NodeKind.SYNAPSE))
-        tooling_synapses = [node for node in synapses if node.payload.get("action") == "design_tooling"]
+        tooling_synapses = [
+            node for node in synapses if node.payload.get("action") == "design_tooling"
+        ]
         self.assertEqual(len(tooling_synapses), len(tooling_nodes))
 
     def test_graph_runtime_injects_stabilize_tooling_steps_from_degraded_capabilities(self) -> None:
@@ -258,15 +260,21 @@ class DynamicFeatureTest(unittest.TestCase):
             },
         )
 
-        source_nodes = [node_id for node_id in path if step_by_node[node_id]["action"] == "frame_intent"]
-        decision_nodes = [node_id for node_id in path if step_by_node[node_id]["action"] == "decision_synthesis"]
+        source_nodes = [
+            node_id for node_id in path if step_by_node[node_id]["action"] == "frame_intent"
+        ]
+        decision_nodes = [
+            node_id for node_id in path if step_by_node[node_id]["action"] == "decision_synthesis"
+        ]
         self.assertGreaterEqual(len(source_nodes), 1)
         self.assertGreaterEqual(len(decision_nodes), 1)
 
         decision_set = set(decision_nodes)
         found = False
         for source_id in source_nodes:
-            for edge in graph.iter_edges_from(source_id, kinds=[EdgeKind.ACTIVATES], active_only=False):
+            for edge in graph.iter_edges_from(
+                source_id, kinds=[EdgeKind.ACTIVATES], active_only=False
+            ):
                 if edge.target_id in decision_set:
                     self.assertGreaterEqual(edge.weight, 0.45)
                     found = True
@@ -316,7 +324,12 @@ class DynamicFeatureTest(unittest.TestCase):
         organization = SimpleNamespace(
             agents=[],
             workflow=[
-                {"id": "step_frame", "agent_id": "framer", "action": "frame_intent", "output": "intent_frame"},
+                {
+                    "id": "step_frame",
+                    "agent_id": "framer",
+                    "action": "frame_intent",
+                    "output": "intent_frame",
+                },
                 {
                     "id": "step_design_a",
                     "agent_id": "toolsmith_connector_a",
@@ -453,7 +466,9 @@ class DynamicFeatureTest(unittest.TestCase):
                 capability_id="connector.runtime",
             )
         )
-        exec_result = SimpleNamespace(success=True, fallback_used=False, output={"status": "executed"})
+        exec_result = SimpleNamespace(
+            success=True, fallback_used=False, output={"status": "executed"}
+        )
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
             graph=graph,
@@ -516,7 +531,9 @@ class DynamicFeatureTest(unittest.TestCase):
                 capability_id="connector.runtime",
             )
         )
-        exec_result = SimpleNamespace(success=True, fallback_used=False, output={"status": "not_implemented"})
+        exec_result = SimpleNamespace(
+            success=True, fallback_used=False, output={"status": "not_implemented"}
+        )
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
             graph=graph,
@@ -553,7 +570,9 @@ class DynamicFeatureTest(unittest.TestCase):
                 capability_id="connector.runtime",
             )
         )
-        exec_result = SimpleNamespace(success=False, fallback_used=False, output={"status": "error"})
+        exec_result = SimpleNamespace(
+            success=False, fallback_used=False, output={"status": "error"}
+        )
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
             graph=graph,
@@ -632,7 +651,9 @@ class DynamicFeatureTest(unittest.TestCase):
             self.assertTrue(any(node.id.startswith("syn_") for node in synapses))
             self.assertTrue(any(node.id.startswith("cap_") for node in capabilities))
             self.assertTrue(any(node.id.startswith("mem_") for node in memories))
-            self.assertTrue(any(node.payload.get("action") == "workflow_orchestrator" for node in synapses))
+            self.assertTrue(
+                any(node.payload.get("action") == "workflow_orchestrator" for node in synapses)
+            )
             self.assertTrue(any(node.has_subgraphs for node in synapses))
 
     def test_parallel_topology_creates_branching_activates_edges(self) -> None:

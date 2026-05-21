@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 import json
 
 from arnaldo.contracts import new_id
+from .helpers import is_generic_uncertainty, is_lightweight_chat_turn, parse_dt
 
 
 @dataclass(slots=True)
@@ -110,7 +111,7 @@ class ProactivityManager:
                 item
                 for item in records
                 if str(item.get("status", "")).strip() == "pending"
-                and _parse_dt(item.get("due_at")) <= now
+                and parse_dt(item.get("due_at")) <= now
             ]
             pending_due.sort(
                 key=lambda item: (
@@ -141,7 +142,7 @@ class ProactivityManager:
         sid = str(getattr(session, "id", "")).strip()
         if not sid:
             return 0
-        if self._is_lightweight_chat_turn(task):
+        if is_lightweight_chat_turn(task):
             return 0
         scheduled = 0
         user_name = str(getattr(session, "learned_preferences", {}).get("user_name", "")).strip()
@@ -150,7 +151,7 @@ class ProactivityManager:
         uncertainties = []
         for item in getattr(task, "uncertainty", []) or []:
             question = str(item.get("question", "")).strip() if isinstance(item, dict) else ""
-            if question and not self._is_generic_uncertainty(question):
+            if question and not is_generic_uncertainty(question):
                 uncertainties.append(question)
         if uncertainties:
             created = self.schedule(
@@ -196,31 +197,23 @@ class ProactivityManager:
                     metadata={"run_id": run_id, "source": "adaptive.inferred_objective"},
                 )
                 scheduled += 1 if created else 0
+
+        # Fallback: se nenhum trigger específico, agenda follow-up genérico
+        if scheduled == 0:
+            goal = task.goal if isinstance(getattr(task, "goal", None), dict) else {}
+            stmt = str(goal.get("statement", "")).strip()
+            if stmt:
+                created = self.schedule(
+                    session_id=sid,
+                    kind="follow_up",
+                    priority=0.40,
+                    delay_seconds=45,
+                    message=f"{vocative}posso aprofundar ou expandir o que acabamos de trabalhar.",
+                    metadata={"run_id": run_id, "source": "fallback_followup"},
+                )
+                scheduled += 1 if created else 0
+
         return scheduled
-
-    @staticmethod
-    def _is_lightweight_chat_turn(task: Any) -> bool:
-        goal = task.goal if isinstance(getattr(task, "goal", None), dict) else {}
-        if str(goal.get("type", "")).strip() != "open_ended_execution":
-            return False
-        context_raw = getattr(task, "context", {})
-        context = context_raw if isinstance(context_raw, dict) else {}
-        raw = str(context.get("raw_request") or context.get("original_request") or "").strip().lower()
-        if not raw:
-            return False
-        if len(raw.split()) <= 5:
-            return True
-        return False
-
-    @staticmethod
-    def _is_generic_uncertainty(question: str) -> bool:
-        lowered = question.strip().lower()
-        generic_markers = (
-            "qual artefato final",
-            "nivel de profundidade",
-            "quais acoes externas",
-        )
-        return any(marker in lowered for marker in generic_markers)
 
     def pending_count(self, *, session_id: str) -> int:
         sid = str(session_id or "").strip()
@@ -242,7 +235,7 @@ class ProactivityManager:
             msg = " ".join(str(item.get("message", "")).strip().split()).lower()
             if not msg or msg != normalized_message:
                 continue
-            created_at = _parse_dt(item.get("created_at"))
+            created_at = parse_dt(item.get("created_at"))
             if created_at >= threshold:
                 return True
         return False
@@ -288,16 +281,3 @@ class ProactivityManager:
             "metadata": item.metadata,
             "delivered_at": item.delivered_at,
         }
-
-
-def _parse_dt(raw: Any) -> datetime:
-    if isinstance(raw, datetime):
-        return raw.astimezone(timezone.utc) if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
-    text = str(raw or "").strip()
-    if not text:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
