@@ -107,14 +107,23 @@ def print_run_result(result: Any, compact: bool = False) -> None:
 
 def print_runtime_error(exc: Exception) -> None:
     message = str(exc).strip() or repr(exc)
+    body = str(getattr(exc, "body", "") or "").strip()
+    if body:
+        compact_body = " ".join(body.split())
+        if len(compact_body) > 320:
+            compact_body = compact_body[:320].rstrip() + "..."
+    else:
+        compact_body = ""
     print("=" * 72)
     print("ERRO DE EXECUCAO (modo real, sem fallback)")
     print("=" * 72)
     print(f"Tipo          : {exc.__class__.__name__}")
     print(f"Mensagem      : {message}")
+    if compact_body:
+        print(f"Detalhe       : {compact_body}")
     print("-" * 72)
     print("Checklist rapido")
-    print("- Configure LLM Azure no ambiente (.env) com endpoint, key e deployments.")
+    print("- Configure LLM Azure no ambiente (.env) com endpoint, key e model/deployment.")
     print("- Verifique conectividade com a Azure OpenAI.")
     print("- Confirme se o deployment/tier requisitado existe e aceita requests.")
     print("- Se o erro for refusal, revise o pedido para reduzir bloqueios de safety.")
@@ -155,7 +164,7 @@ def build_run_summary(result: Any) -> dict[str, Any]:
         "graph_capability_synced": len(graph_capability_sync.get("synced", []) or []),
         "graph_capability_sync_skipped": len(graph_capability_sync.get("skipped", []) or []),
         "duration_seconds": duration_seconds,
-        "artifact_path": str(files.get("artifact", "")),
+        "artifact_path": str(files.get("artifact") or files.get("response") or ""),
         "evidence_path": str(files.get("evidence", "")),
         "trace_path": str(files.get("trace", "")),
         "prompts_path": str(files.get("prompts", "")),

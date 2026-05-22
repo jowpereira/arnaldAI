@@ -147,12 +147,29 @@ def _env_optional(name: str) -> Optional[str]:
     return raw.strip()
 
 
+def _env_first(*names: str) -> Optional[str]:
+    """Retorna a primeira env var não-vazia dentre vários aliases."""
+    for name in names:
+        value = _env_optional(name)
+        if value:
+            return value
+    return None
+
+
 def load_config() -> AzureOpenAIConfig:
     """Lê configuração completa de variáveis de ambiente.
 
-    Configura 4 tiers, todos via Responses API:
-    - GOD/EXPERT/FAST: endpoint Azure AI Foundry Project (/api/projects/<p>/openai/v1/responses)
-    - CODEX: endpoint agentic-builder (/openai/v1/responses)
+    Fluxo simples recomendado:
+    - AZURE_OPENAI_ENDPOINT
+    - AZURE_OPENAI_API_KEY
+    - AZURE_OPENAI_MODEL (ou AZURE_OPENAI_DEPLOYMENT)
+
+    Com isso, GOD/EXPERT/FAST compartilham o mesmo modelo/deployment.
+    Se o endpoint for /openai/v1, CODEX também pode reutilizar a mesma base.
+
+    Fluxo avançado opcional:
+    - overrides por tier (AZURE_TIER_GOD_DEPLOYMENT, ...)
+    - CODEX em base separada (AZURE_CODEX_BASE_URL / AZURE_CODEX_API_KEY)
 
     Detecção de api_style:
     - Endpoint inclui '/openai/v1' → tiers usam api_style=responses (Foundry Project)
@@ -168,13 +185,14 @@ def load_config() -> AzureOpenAIConfig:
     is_v1_endpoint = "/openai/v1" in endpoint
     tier_api_style = API_STYLE_RESPONSES if is_v1_endpoint else API_STYLE_DEPLOYMENTS
     tier_base_url = endpoint if is_v1_endpoint else None
+    shared_model = _env_first("AZURE_OPENAI_MODEL", "AZURE_OPENAI_DEPLOYMENT")
 
     # Tiers de raciocínio (GOD/EXPERT) consomem ~200 reasoning_tokens internos
     # antes de gerar output, então max_output_tokens precisa ser grande o bastante
     tiers: Dict[str, TierConfig] = {
         GOD: TierConfig(
             name=GOD,
-            model=os.environ.get("AZURE_TIER_GOD_DEPLOYMENT", "god-tier"),
+            model=_env_first("AZURE_TIER_GOD_DEPLOYMENT") or shared_model or "god-tier",
             description="gpt-5-pro — raciocínio profundo, planejamento, síntese complexa",
             api_style=tier_api_style,
             base_url=tier_base_url,
@@ -186,7 +204,7 @@ def load_config() -> AzureOpenAIConfig:
         ),
         EXPERT: TierConfig(
             name=EXPERT,
-            model=os.environ.get("AZURE_TIER_EXPERT_DEPLOYMENT", "expert-tier"),
+            model=_env_first("AZURE_TIER_EXPERT_DEPLOYMENT") or shared_model or "expert-tier",
             description="gpt-5 — síntese e análise padrão, drafting de artefatos",
             api_style=tier_api_style,
             base_url=tier_base_url,
@@ -198,7 +216,7 @@ def load_config() -> AzureOpenAIConfig:
         ),
         FAST: TierConfig(
             name=FAST,
-            model=os.environ.get("AZURE_TIER_FAST_DEPLOYMENT", "fast-tier"),
+            model=_env_first("AZURE_TIER_FAST_DEPLOYMENT") or shared_model or "fast-tier",
             description="gpt-5.4-nano — extração, formatação, classificação rápida (sem reasoning)",
             api_style=tier_api_style,
             base_url=tier_base_url,
@@ -208,18 +226,20 @@ def load_config() -> AzureOpenAIConfig:
         ),
     }
 
-    # Registra CODEX apenas se há base_url configurado
+    # Registra CODEX quando explicitamente configurado ou quando o endpoint
+    # simples já é Responses API e pode reutilizar a mesma base/modelo.
     codex_base_url = _env_optional("AZURE_CODEX_BASE_URL")
-    if codex_base_url:
+    reuse_primary_for_codex = bool(is_v1_endpoint and shared_model)
+    if codex_base_url or reuse_primary_for_codex:
         tiers[CODEX] = TierConfig(
             name=CODEX,
-            model=os.environ.get("AZURE_CODEX_DEPLOYMENT", "gpt-5.3-codex"),
+            model=_env_first("AZURE_CODEX_DEPLOYMENT") or shared_model or "gpt-5.3-codex",
             description="gpt-5.3-codex — geração de código via Responses API com reasoning effort",
             api_style=API_STYLE_RESPONSES,
-            base_url=codex_base_url.rstrip("/"),
+            base_url=(codex_base_url or endpoint).rstrip("/"),
             api_version=_env_optional("AZURE_CODEX_API_VERSION"),
             # Recurso Codex pode ter chave separada da Foundry Project
-            api_key=_env_optional("AZURE_CODEX_API_KEY"),
+            api_key=_env_optional("AZURE_CODEX_API_KEY") or api_key,
             default_temperature=1.0,
             default_max_tokens=4000,
             supports_reasoning=True,

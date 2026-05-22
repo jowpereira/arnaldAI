@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from typing import Any, Dict, List
 
 from arnaldo.components import IntentCompiler
@@ -158,6 +159,26 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertEqual(tier.default_max_tokens, 2000)
         self.assertEqual(tier.api_style, API_STYLE_DEPLOYMENTS)
         self.assertFalse(tier.supports_reasoning)
+
+    def test_load_config_accepts_single_shared_model(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_ENDPOINT": "https://resource.services.ai.azure.com/api/projects/demo/openai/v1",
+                "AZURE_OPENAI_API_KEY": "shared-key",
+                "AZURE_OPENAI_MODEL": "gpt-5-mini",
+            },
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertTrue(config.is_configured)
+        self.assertEqual(config.tier(GOD).model, "gpt-5-mini")
+        self.assertEqual(config.tier(EXPERT).model, "gpt-5-mini")
+        self.assertEqual(config.tier(FAST).model, "gpt-5-mini")
+        self.assertIn(CODEX, config.tiers)
+        self.assertEqual(config.tier(CODEX).base_url, config.endpoint)
+        self.assertEqual(config.tier(CODEX).model, "gpt-5-mini")
 
 
 class ClientNotConfiguredTest(unittest.TestCase):
@@ -327,6 +348,27 @@ class CodexTierTest(unittest.TestCase):
         self.assertEqual(body["input"][1]["type"], "message")
         self.assertEqual(body["input"][1]["role"], "user")
         self.assertEqual(body["input"][1]["content"][0]["type"], "input_text")
+
+    def test_codex_multi_turn_history_uses_output_text_for_assistant(self) -> None:
+        client = self._build_client_with_codex()
+        codex = client.config.tier(CODEX)
+        body = client._build_body(
+            tier_cfg=codex,
+            messages=[
+                {"role": "system", "content": "Você é um especialista."},
+                {"role": "user", "content": "oi"},
+                {"role": "assistant", "content": "Fala. O que você quer resolver?"},
+                {"role": "user", "content": "você tem nome"},
+            ],
+            temperature=None,
+            max_tokens=None,
+            response_format=None,
+            reasoning_effort=None,
+            reasoning_summary=None,
+            extra=None,
+        )
+        self.assertEqual(body["input"][2]["role"], "assistant")
+        self.assertEqual(body["input"][2]["content"][0]["type"], "output_text")
 
     def test_codex_reasoning_effort_can_be_overridden(self) -> None:
         client = self._build_client_with_codex()

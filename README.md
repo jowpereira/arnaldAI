@@ -93,9 +93,12 @@ substrato.
 uv venv --python 3.12
 uv sync --extra dev
 
-# Configurar Azure OpenAI (4 tiers)
+# Configurar Azure OpenAI (modo simples)
 cp .env.example .env
-# editar .env com suas credenciais
+# editar só 3 campos no .env:
+# - AZURE_OPENAI_ENDPOINT
+# - AZURE_OPENAI_API_KEY
+# - AZURE_OPENAI_MODEL
 
 # Validar
 uv run pytest                              # 130 testes

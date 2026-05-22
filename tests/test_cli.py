@@ -8,15 +8,40 @@ from arnaldo import cli
 
 
 class _DummyResult:
-    def __init__(self, artifact: Path | None, evidence: Path | None = None) -> None:
+    def __init__(
+        self,
+        artifact: Path | None,
+        evidence: Path | None = None,
+        *,
+        response: str = "",
+        response_path: Path | None = None,
+    ) -> None:
         self.files = {}
         if artifact is not None:
             self.files["artifact"] = artifact
         if evidence is not None:
             self.files["evidence"] = evidence
+        if response_path is not None:
+            self.files["response"] = response_path
+        self.response = response
+        self.run_dir = response_path.parent if response_path is not None else None
 
 
 class CliResponsePreviewTest(unittest.TestCase):
+    def test_build_chat_response_prefers_result_response(self) -> None:
+        result = _DummyResult(None, response="Resposta direta do agente.")
+        preview = cli.build_chat_response(result)
+        self.assertEqual(preview, "Resposta direta do agente.")
+
+    def test_build_chat_response_reads_response_file_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            response_path = Path(tmp) / "response.md"
+            response_path.write_text("Resposta carregada do arquivo.", encoding="utf-8")
+            result = _DummyResult(None, response_path=response_path)
+            preview = cli.build_chat_response(result)
+
+        self.assertEqual(preview, "Resposta carregada do arquivo.")
+
     def test_build_agent_response_preview_reads_goal_outputs_and_actions(self) -> None:
         artifact = """# Artifact
 
@@ -82,6 +107,11 @@ Responder no terminal.
         result = _DummyResult(None)
         preview = cli._build_agent_response_preview(result)
         self.assertEqual(preview, "")
+
+    def test_build_agent_response_preview_falls_back_to_direct_response(self) -> None:
+        result = _DummyResult(None, response="Texto direto da run.")
+        preview = cli._build_agent_response_preview(result)
+        self.assertEqual(preview, "Texto direto da run.")
 
 
 class CliStreamingTest(unittest.TestCase):
