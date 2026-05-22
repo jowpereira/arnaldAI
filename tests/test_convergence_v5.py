@@ -33,6 +33,11 @@ class ClassifyRequestTest(unittest.TestCase):
         self.assertEqual(c.level, "conversational")
         self.assertTrue(c.skip_full_pipeline)
 
+    def test_plain_ola_is_conversational(self) -> None:
+        c = classify_request("ola")
+        self.assertEqual(c.level, "conversational")
+        self.assertTrue(c.skip_full_pipeline)
+
     def test_closing_is_conversational(self) -> None:
         c = classify_request("obrigado")
         self.assertEqual(c.level, "conversational")

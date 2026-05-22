@@ -66,33 +66,41 @@ Sem dependências extras para falar com Azure OpenAI.
 
 ---
 
-## 2. Configuração Azure OpenAI (4 tiers)
+## 2. Configuração Azure OpenAI
 
 ### 2.1 Arquivo `.env`
 
-Copie `.env.example` para `.env` e preencha com seus valores:
+Copie `.env.example` para `.env` e preencha com seus valores.
+
+Fluxo simples recomendado:
 
 ```bash
-# ─── Endpoint 1: Foundry Project (god/expert/fast via Responses API) ───
+# ─── Fluxo simples: 1 endpoint + 1 key + 1 model/deployment ──────────
 AZURE_OPENAI_ENDPOINT=https://<recurso>.services.ai.azure.com/api/projects/<project>/openai/v1
 AZURE_OPENAI_API_KEY=<chave-do-project>
+AZURE_OPENAI_MODEL=<model-ou-deployment>
 AZURE_OPENAI_API_VERSION=2025-04-01-preview
 
+# ─── Comportamento ───────────────────────────────────────────────────
+ARNALDO_LLM_ENABLED=true
+ARNALDO_LLM_TIMEOUT_SECONDS=120
+ARNALDO_LLM_MAX_TOKENS_DEFAULT=2000
+```
+
+Overrides avançados são opcionais:
+
+```bash
+# Tiers específicos
 AZURE_TIER_GOD_DEPLOYMENT=god-tier
 AZURE_TIER_EXPERT_DEPLOYMENT=expert-tier
 AZURE_TIER_FAST_DEPLOYMENT=fast-tier
 
-# ─── Endpoint 2: Codex (recurso separado, pode ter chave diferente) ───
+# CODEX em base separada
 AZURE_CODEX_BASE_URL=https://<codex-recurso>.services.ai.azure.com/api/projects/<codex-project>/openai/v1
 AZURE_CODEX_DEPLOYMENT=gpt-5.3-codex
 AZURE_CODEX_REASONING_EFFORT=xhigh
 AZURE_CODEX_REASONING_SUMMARY=auto
 AZURE_CODEX_API_KEY=<chave-do-codex>     # se diferente da global
-
-# ─── Comportamento ────────────────────────────────────────────────────
-ARNALDO_LLM_ENABLED=true
-ARNALDO_LLM_TIMEOUT_SECONDS=120
-ARNALDO_LLM_MAX_TOKENS_DEFAULT=2000
 
 # Default: .env tem precedência sobre env vars do shell.
 # Para reverter ao comportamento clássico (env > .env):

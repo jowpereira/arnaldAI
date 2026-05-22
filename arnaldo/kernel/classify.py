@@ -41,7 +41,7 @@ class RequestComplexity:
 
 # Padrões de requests puramente conversacionais (saudações, despedidas)
 _GREETING_PATTERNS = re.compile(
-    r"^(oi|olá|hey|hello|hi|bom dia|boa tarde|boa noite|e aí|fala)\b",
+    r"^(oi|olá|ola|hey|hello|hi|bom dia|boa tarde|boa noite|e aí|fala)\b",
     re.IGNORECASE,
 )
 _CLOSING_PATTERNS = re.compile(

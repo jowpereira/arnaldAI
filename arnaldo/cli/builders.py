@@ -9,6 +9,34 @@ from .formatting import compact_block, parse_markdown_sections
 from .utils import safe_read_jsonl
 
 
+def _read_response_text(result: Any) -> str:
+    direct = str(getattr(result, "response", "") or "").strip()
+    if direct:
+        return direct
+
+    files = dict(getattr(result, "files", {}) or {})
+    response_path = files.get("response")
+    if isinstance(response_path, Path) and response_path.exists():
+        try:
+            text = response_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            text = ""
+        if text:
+            return text
+
+    run_dir = getattr(result, "run_dir", None)
+    if isinstance(run_dir, Path):
+        fallback_path = run_dir / "response.md"
+        if fallback_path.exists():
+            try:
+                text = fallback_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                text = ""
+            if text:
+                return text
+    return ""
+
+
 def build_agent_response_preview(result: Any, *, max_chars: int = 2200) -> str:
     files = dict(getattr(result, "files", {}) or {})
     selected: list[str] = []
@@ -20,6 +48,10 @@ def build_agent_response_preview(result: Any, *, max_chars: int = 2200) -> str:
     if artifact_preview:
         selected.append(artifact_preview)
 
+    response_text = _read_response_text(result)
+    if response_text:
+        selected.append(response_text)
+
     preview = "\n\n".join(part for part in selected if part).strip()
     if len(preview) > max_chars:
         preview = preview[:max_chars].rstrip() + "..."
@@ -27,6 +59,10 @@ def build_agent_response_preview(result: Any, *, max_chars: int = 2200) -> str:
 
 
 def build_chat_response(result: Any, *, max_chars: int = 1200) -> str:
+    response_text = _read_response_text(result)
+    if response_text:
+        return response_text[:max_chars]
+
     files = dict(getattr(result, "files", {}) or {})
     artifact_path = files.get("artifact")
     if isinstance(artifact_path, Path) and artifact_path.exists():

@@ -68,12 +68,15 @@ def fast_response(
 
     session = sessions.record_turn(session, request, response_text)
     store = RunStore(output_dir, run_id).create()
-    store.write_text("response.md", response_text)
-    store.write_json("learning.json", {"feedback": feedback, "reward": reward})
+    response_path = store.write_text("response.md", response_text)
+    learning_path = store.write_json("learning.json", {"feedback": feedback, "reward": reward})
     return RunResult(
         run_id=run_id,
         run_dir=store.run_dir,
-        files={},
+        files={
+            "response": response_path,
+            "learning": learning_path,
+        },
         session_id=session.id,
         response=response_text,
     )
@@ -149,8 +152,8 @@ def medium_response(
 
     session = sessions.record_turn(session, request, response_text)
     store = RunStore(output_dir, run_id).create()
-    store.write_text("response.md", response_text)
-    store.write_json(
+    response_path = store.write_text("response.md", response_text)
+    learning_path = store.write_json(
         "learning.json",
         {
             "feedback": feedback,
@@ -163,7 +166,10 @@ def medium_response(
     return RunResult(
         run_id=run_id,
         run_dir=store.run_dir,
-        files={},
+        files={
+            "response": response_path,
+            "learning": learning_path,
+        },
         session_id=session.id,
         response=response_text,
     )

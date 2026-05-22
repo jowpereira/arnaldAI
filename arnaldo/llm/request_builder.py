@@ -127,11 +127,12 @@ def _messages_to_responses_input(messages: List[Dict[str, str]]) -> Any:
             text = "\n".join(str(part) for part in content if str(part).strip())
         else:
             text = str(content)
+        content_type = "output_text" if role == "assistant" else "input_text"
         items.append(
             {
                 "type": "message",
                 "role": role,
-                "content": [{"type": "input_text", "text": text}],
+                "content": [{"type": content_type, "text": text}],
             }
         )
     return items
