@@ -39,6 +39,26 @@ from .workflow_helpers import (
     _workflow_seed_for_topology,
 )
 
+# Campos herdáveis que podem vazar entre steps de materialização
+_INHERITABLE_PARAMS = (
+    "max_tokens",
+    "timeout",
+    "temperature",
+    "max_retries",
+    "retry_attempts",
+    "reasoning_effort",
+    "reasoning_summary",
+    "tier_preference",
+    "objective",
+    "output_contract",
+)
+
+
+def _strip_inherited_params(item: Dict[str, Any]) -> None:
+    """Remove campos herdados de steps anteriores para evitar payload leak."""
+    for key in _INHERITABLE_PARAMS:
+        item.pop(key, None)
+
 
 def _materialize_runtime_workflow(
     *,
@@ -69,14 +89,14 @@ def _materialize_runtime_workflow(
     for bucket in ("available", "degraded", "missing"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if capability_id.startswith(("connector.", "tool.")):
+            if capability_id.startswith(("connector.", "tool.", "search.")):
                 tooling_id_by_slug[_slug(capability_id)] = capability_id
                 module_path = _capability_module_path(item)
                 if module_path:
                     module_path_by_capability[capability_id] = module_path
     for item in task.capability_needs:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.")):
+        if capability_id.startswith(("connector.", "tool.", "search.")):
             tooling_id_by_slug[_slug(capability_id)] = capability_id
 
     workflow: list[Dict[str, Any]] = []
@@ -163,6 +183,7 @@ def _materialize_runtime_workflow(
         if not compact:
             compact = _workflow_seed_for_lightweight_conversation()
         item = compact[0]
+        _strip_inherited_params(item)
         item.setdefault("agent_id", _default_agent_for_action("draft_artifact"))
         item["action"] = "draft_artifact"
         item.setdefault("output", _default_output_for_action("draft_artifact"))
@@ -183,6 +204,7 @@ def _materialize_runtime_workflow(
         if not compact:
             compact = _workflow_seed_for_lightweight_conversation()
         item = compact[0]
+        _strip_inherited_params(item)
         request = _extract_primary_user_request(task)
         words = _word_count(request)
         item.setdefault("agent_id", _default_agent_for_action("draft_artifact"))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Iterable
 
@@ -227,13 +228,13 @@ class HybridMatcher:
     ) -> None:
         """BFS típica, ponderada por edge weights, com limite de hops."""
         visited: dict[str, int] = {entry.id: 0}
-        queue: list[tuple[str, int, list[str]]] = [(entry.id, 0, [])]
+        queue: deque[tuple[str, int, list[str]]] = deque([(entry.id, 0, [])])
 
         # Sempre inclui o próprio entry
         self._upsert_candidate(candidates, entry, hop=0, path=[], semantic=entry_sim)
 
         while queue:
-            node_id, hop, path = queue.pop(0)
+            node_id, hop, path = queue.popleft()
             if hop >= self.max_hops:
                 continue
             for edge in graph.iter_edges_from(node_id, kinds=edge_kinds):

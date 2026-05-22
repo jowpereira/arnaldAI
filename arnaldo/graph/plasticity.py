@@ -113,7 +113,9 @@ class DecayPolicy:
             "semantic_tech": timedelta(days=30),
             "capability": timedelta(days=90),
             "semantic_stable": timedelta(days=180),
+            "factual": timedelta(days=180),
             "procedural": timedelta(days=365),
+            "operational": timedelta(days=14),
             "__fallback__": timedelta(days=60),
         }
     )

@@ -8,10 +8,10 @@ import json
 from arnaldo.graph import (
     CognitiveGraph,
     EdgeKind,
-    GraphEdge,
     MemoryNode,
     SynapseNode,
 )
+from arnaldo.graph.edge_ops import ensure_edge
 
 from .models import MemoryRecord, MemorySynapseCandidate, association_signature
 from .graph_bridge_utils import (
@@ -59,6 +59,8 @@ def ingest_record_to_graph(
             reward=reward,
         )
         ensure_memory_transition(graph, source_id=source_id, target_id=node.id, weight=reward)
+        # Ligação semântica entre memórias com conteúdo similar
+        ensure_semantic_link(graph, source_id=source_id, target_id=node.id, reward=reward)
         if candidate.is_materialized:
             refresh_materialized_synapse(graph, candidate)
     materialize_candidates(
@@ -73,7 +75,7 @@ def to_memory_node(record: MemoryRecord) -> MemoryNode:
     """Converte um MemoryRecord em MemoryNode."""
     record_id = str(record.id).strip()
     if not record_id:
-        digest = hashlib.sha1(
+        digest = hashlib.sha256(
             json.dumps(record.payload, sort_keys=True).encode("utf-8")
         ).hexdigest()[:12]
         record_id = f"memory_{digest}"
@@ -164,7 +166,7 @@ def materialize_candidates(
             graph,
             source_id=candidate.source_memory_id,
             target_id=synapse_id,
-            kind=EdgeKind.ACTIVATES,
+            kind=EdgeKind.INFORMS,
             weight=min(0.95, 0.5 + (0.08 * candidate.support)),
         )
         ensure_edge(
@@ -203,7 +205,7 @@ def refresh_materialized_synapse(
         graph,
         source_id=candidate.source_memory_id,
         target_id=synapse_id,
-        kind=EdgeKind.ACTIVATES,
+        kind=EdgeKind.INFORMS,
         weight=min(0.95, 0.5 + (0.08 * candidate.support)),
     )
     ensure_edge(
@@ -231,29 +233,25 @@ def ensure_memory_transition(
     )
 
 
-def ensure_edge(
+def ensure_semantic_link(
     graph: CognitiveGraph,
     *,
     source_id: str,
     target_id: str,
-    kind: EdgeKind,
-    weight: float,
+    reward: float,
 ) -> None:
-    if not (graph.has_node(source_id) and graph.has_node(target_id)):
+    """Cria aresta SEMANTIC entre memórias com conteúdo similar.
+
+    Só cria se reward (que incorpora Jaccard overlap) indica
+    similaridade real de conteúdo, não apenas co-temporalidade.
+    """
+    if reward < 0.3:
         return
-    clamped = max(0.0, min(1.0, float(weight)))
-    for edge in graph.iter_edges_from(source_id, kinds=[kind], active_only=False):
-        if edge.target_id == target_id:
-            # I4: atualiza peso se diferente (plasticidade)
-            if abs(edge.weight - clamped) > 1e-9:
-                updated = edge.with_weight(clamped)
-                graph.add_edge(updated)
-            return
-    graph.add_edge(
-        GraphEdge.connect(
-            source_id=source_id,
-            target_id=target_id,
-            kind=kind,
-            weight=clamped,
-        )
+    semantic_weight = min(0.90, 0.25 + (0.5 * reward))
+    ensure_edge(
+        graph,
+        source_id=source_id,
+        target_id=target_id,
+        kind=EdgeKind.SEMANTIC,
+        weight=semantic_weight,
     )

@@ -12,6 +12,7 @@ from arnaldo.storage import RunStore
 from . import organization as _org
 from . import session as _session
 from .artifacts import build_memory_hints, collect_runtime_outputs, write_pipeline_artifacts
+from .fast_path import synthesize_response
 from .retrieval import retrieve_for_request
 
 if TYPE_CHECKING:
@@ -101,7 +102,11 @@ def run_full_pipeline(
     memory_hints = build_memory_hints(kernel.memory, request, task, store, files)
 
     if isinstance(kernel.runtime, GraphRuntime):
-        kernel.runtime.set_seed_graph(session.learned_preferences.get("execution_graph_uri"))
+        # Usar grafo do kernel como base (com CapabilityNodes bootstrap)
+        seed = session.learned_preferences.get("execution_graph_uri")
+        if not seed:
+            seed = str(kernel.memory.graph_path)
+        kernel.runtime.set_seed_graph(seed)
     runtime_result = kernel.runtime.run(
         RuntimeContext(
             run_id=run_id,
@@ -152,7 +157,7 @@ def run_full_pipeline(
             "Mensagens proativas agendadas para continuidade de sessão.",
             {"count": proactive_scheduled, "session_id": session.id},
         )
-    response = kernel._synthesize_response(runtime_result, request)
+    response = synthesize_response(runtime_result, request, kernel._llm_client)
     session = kernel.sessions.record_turn(
         session,
         user_message=request,

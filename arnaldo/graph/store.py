@@ -5,24 +5,22 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator  # Iterable used in match()
 
-import msgpack
 import networkx as nx
 import numpy as np
-from .edges import EdgeKind, GraphEdge
-from .events import GraphEvent
+from .edges import GraphEdge
+from .events import EventKind, GraphEvent
 from .matching import HybridMatcher, MatchResult
-from .nodes import CapabilityNode, GraphNode, MemoryNode, NodeKind, NodeStatus, SynapseNode
+from .nodes import GraphNode, NodeKind, NodeStatus
 from .plasticity import PlasticityEngine
-from .refs import GraphRef, GraphRefKind
-from .registry import GraphCycleError, GraphRegistry, _new_graph_id
+from .refs import GraphRef
+from .registry import GraphRegistry, _new_graph_id
 from .serialization import (
-    serialize_node,
-    deserialize_node,
-    serialize_edge,
-    deserialize_edge,
     top_n_tags,
+    persist_graph,
+    load_graph,
 )
 from .temporal import utc_now
+from .event_ledger import append_event
 from datetime import datetime
 from . import hierarchy as _hierarchy, query as _query
 
@@ -50,6 +48,7 @@ class CognitiveGraph:
         self._registry: GraphRegistry | None = registry
         self._read_only: bool = False
         self._events: list[GraphEvent] = []
+        self._event_ledger_path: Path | None = None
 
     @property
     def graph_id(self) -> str:
@@ -88,7 +87,7 @@ class CognitiveGraph:
         self._nodes[node.id] = node
         self._g.add_node(node.id, kind=node.kind.value)
         self._add_to_indices(node)
-        self._record(GraphEvent("node_added", node.id, utc_now(), {"kind": node.kind.value}))
+        self._record(GraphEvent(EventKind.NODE_ADDED, node.id, utc_now(), {"kind": node.kind.value}))
         return node
 
     def add_edge(self, edge: GraphEdge) -> GraphEdge:
@@ -108,7 +107,7 @@ class CognitiveGraph:
         self._g.add_edge(edge.source_id, edge.target_id, key=edge.id, kind=edge.kind.value)
         if not edge.kind.is_directed and edge.source_id != edge.target_id:
             self._g.add_edge(edge.target_id, edge.source_id, key=edge.id, kind=edge.kind.value)
-        self._record(GraphEvent("edge_added", edge.id, utc_now(), {"kind": edge.kind.value}))
+        self._record(GraphEvent(EventKind.EDGE_ADDED, edge.id, utc_now(), {"kind": edge.kind.value}))
         return edge
 
     def remove_node(self, node_id: str) -> None:
@@ -126,7 +125,7 @@ class CognitiveGraph:
         node = self._nodes.pop(node_id)
         self._remove_from_indices(node)
         self._g.remove_node(node_id)
-        self._record(GraphEvent("node_removed", node_id, utc_now()))
+        self._record(GraphEvent(EventKind.NODE_REMOVED, node_id, utc_now()))
 
     def get_node(self, node_id: str) -> GraphNode | None:
         return self._nodes.get(node_id)
@@ -168,7 +167,7 @@ class CognitiveGraph:
         if node is None:
             return
         node.activate(at)
-        self._record(GraphEvent("activation", node_id, at or utc_now()))
+        self._record(GraphEvent(EventKind.ACTIVATION, node_id, at or utc_now()))
 
     def record_outcome(self, node_id: str, *, success: bool) -> None:
         self._assert_mutable()
@@ -177,7 +176,7 @@ class CognitiveGraph:
             return
         updated = self.plasticity.update_node(node, success=success)
         self._nodes[node_id] = updated
-        self._record(GraphEvent("hebbian", node_id, utc_now(), {"success": success}))
+        self._record(GraphEvent(EventKind.HEBBIAN, node_id, utc_now(), {"success": success}))
 
     def record_edge_outcome(self, edge_id: str, *, success: bool) -> None:
         self._assert_mutable()
@@ -226,7 +225,7 @@ class CognitiveGraph:
                     counters["to_archived"] += 1
                 elif new_status == NodeStatus.CONSOLIDATED:
                     counters["to_consolidated"] += 1
-        self._record(GraphEvent("decay_swept", "<all>", now, dict(counters)))
+        self._record(GraphEvent(EventKind.DECAY_SWEPT, "<all>", now, dict(counters)))
         return counters
 
     def match(
@@ -247,17 +246,7 @@ class CognitiveGraph:
         )
 
     def persist(self, path: Path) -> Path:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": "cognitive-graph/v2",
-            "graph_id": self._graph_id,
-            "nodes": [serialize_node(n) for n in self._nodes.values()],
-            "edges": [serialize_edge(e) for e in self._edges.values()],
-        }
-        with path.open("wb") as f:
-            msgpack.pack(payload, f, use_bin_type=True)
-        return path
+        return persist_graph(self, path)
 
     @classmethod
     def load(
@@ -268,22 +257,13 @@ class CognitiveGraph:
         matcher: HybridMatcher | None = None,
         registry: GraphRegistry | None = None,
     ) -> CognitiveGraph:
-        with Path(path).open("rb") as f:
-            payload = msgpack.unpack(f, raw=False)
-        version = payload.get("version")
-        if version not in {"cognitive-graph/v1", "cognitive-graph/v2"}:
-            raise ValueError(f"Versão de schema desconhecida: {version}")
-        cog = cls(
-            graph_id=payload.get("graph_id"),
+        return load_graph(
+            path,
+            graph_cls=cls,
             plasticity=plasticity,
             matcher=matcher,
             registry=registry,
         )
-        for n_data in payload["nodes"]:
-            cog.add_node(deserialize_node(n_data))
-        for e_data in payload["edges"]:
-            cog.add_edge(deserialize_edge(e_data))
-        return cog
 
     def stats(self) -> dict[str, Any]:
         kind_counts = {k.value: len(v) for k, v in self._by_kind.items()}
@@ -315,3 +295,4 @@ class CognitiveGraph:
         self._events.append(event)
         if len(self._events) > 1000:
             self._events = self._events[-500:]
+        append_event(self._event_ledger_path, event)

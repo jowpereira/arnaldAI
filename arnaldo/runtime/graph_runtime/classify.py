@@ -94,7 +94,7 @@ def _is_latency_sensitive_cli_turn(
     for bucket in ("missing", "degraded"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if capability_id.startswith(("connector.", "tool.")):
+            if capability_id.startswith(("connector.", "tool.", "search.")):
                 return False
     return True
 

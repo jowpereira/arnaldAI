@@ -27,6 +27,7 @@ from __future__ import annotations
 from .edges import EdgeKind, GraphEdge
 from .events import EventKind, GraphEvent
 from .execution import ExecutionEngine, StepContext, SynapseExecutionResult
+from .lens import GraphLens
 from .matching import HybridMatcher, MatchResult
 from .nodes import (
     CapabilityNode,
@@ -46,6 +47,7 @@ from .workflows import WorkflowStepSpec, compose_workflows, make_workflow
 __all__ = [
     # Store principal
     "CognitiveGraph",
+    "GraphLens",
     # Tipos de nó
     "GraphNode",
     "MemoryNode",

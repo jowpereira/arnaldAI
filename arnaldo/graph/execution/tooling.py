@@ -58,6 +58,21 @@ def _execute_tooling_synapse(
     context: StepContext,
 ) -> SynapseExecutionResult:
     capability_id = str(node.payload.get("capability_id", "")).strip()
+
+    # ── Tentar execução real via CapabilityExecutor PRIMEIRO ──
+    if capability_id:
+        real_result = _try_real_capability(
+            engine,
+            node=node,
+            tier=tier,
+            request=request,
+            context=context,
+            capability_id=capability_id,
+        )
+        if real_result is not None:
+            return real_result
+
+    # ── Fallback: módulo dinâmico (ToolForge scaffold) ──
     module_path_raw = str(node.payload.get("module_path", "")).strip()
     if not module_path_raw:
         if engine.strict_real:
@@ -179,3 +194,89 @@ def _execute_tooling_synapse(
             success=False,
             error=error,
         )
+
+
+def _try_real_capability(
+    engine: ExecutionEngine,
+    *,
+    node: SynapseNode,
+    tier: str,
+    request: str,
+    context: StepContext,
+    capability_id: str,
+) -> SynapseExecutionResult | None:
+    """Tenta executar capability via CapabilityExecutor. None = não disponível."""
+    try:
+        from arnaldo.capabilities import CapabilityExecutor
+    except ImportError:
+        return None
+
+    executor = CapabilityExecutor()
+    if not executor.can_execute(capability_id):
+        return None
+
+    # Extrair query do request/contexto
+    params = _build_capability_params(capability_id, request, context)
+    result = executor.execute(capability_id, params)
+
+    output: dict[str, Any] = {
+        "capability_id": capability_id,
+        "status": "completed" if result.success else "failed",
+        "real_execution": True,
+        "data": result.data,
+        "source": {
+            "kind": result.source.kind.value
+            if hasattr(result.source.kind, "value")
+            else str(result.source.kind),
+            "identifier": result.source.identifier,
+        },
+        "latency_ms": round(result.latency_ms, 1),
+    }
+    if result.error:
+        output["error"] = result.error
+
+    success = result.success
+    with engine._graph_lock:
+        engine.graph.record_outcome(node.id, success=success)
+        # Proveniência: dado produzido pela capability → DERIVED_FROM
+        if success and result.data:
+            from .capability_provenance import link_capability_to_memory
+
+            link_capability_to_memory(
+                engine.graph,
+                capability_id=capability_id,
+                node_id=node.id,
+                data=result.data,
+                request=request,
+            )
+
+    context.write(
+        node.id,
+        output,
+        action="execute_tooling",
+        agent_id=str(node.payload.get("agent_id", "")),
+        capability_id=capability_id,
+        channel="tool",
+    )
+    return SynapseExecutionResult(
+        node_id=node.id,
+        tier=tier,
+        success=success,
+        output=output,
+    )
+
+
+def _build_capability_params(
+    capability_id: str,
+    request: str,
+    context: StepContext,
+) -> dict[str, Any]:
+    """Constrói parâmetros para a capability a partir do request e contexto."""
+    if capability_id.startswith("search."):
+        return {"query": request, "max_results": 5}
+    if capability_id.startswith("connector."):
+        recent = context.snapshot_recent_outputs(limit=1)
+        if recent and isinstance(recent, dict):
+            return dict(recent)
+        return {"url": request}
+    return {"input": request}

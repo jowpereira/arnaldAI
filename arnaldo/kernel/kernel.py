@@ -1,4 +1,4 @@
-"""Kernel principal do ArnaldAI — coordena o pipeline intent-to-execution."""
+"""Kernel principal do ArnaldAI — pipeline intent-to-execution."""
 
 from __future__ import annotations
 
@@ -37,12 +37,41 @@ from arnaldo.runtime import (
 from arnaldo.session import SessionManager
 
 from . import organization as _org
-from .classify import classify_request
-from .fast_path import fast_response, medium_response, synthesize_response
+from arnaldo.graph.brain import BrainDecision, activate as brain_activate, BRAIN_CONFIDENCE_THRESHOLD
+
+from .classify import RequestComplexity, classify_request
+from .fast_path import fast_response, medium_response
 from .pipeline import run_full_pipeline
 from .bootstrap import bootstrap_graph
+from .metrics import MetricsCollector
+from .plasticity import maybe_sweep_decay
 
 logger = logging.getLogger("arnaldo.kernel")
+
+
+def _resolve_runtime(
+    mode_override: str | None,
+    llm_client: Any,
+) -> RuntimeAdapter:
+    mode = (mode_override or os.environ.get("ARNALDO_RUNTIME_MODE", "graph")).strip().lower()
+    if mode == "graph":
+        return GraphRuntime(llm_client=llm_client)
+    if mode == "multiagent":
+        return MultiAgentRuntime()
+    return LocalRuntime()
+
+
+def _decision_to_complexity(decision: BrainDecision) -> RequestComplexity:
+    """Converte BrainDecision para RequestComplexity (interface legada)."""
+    return RequestComplexity(
+        decision.complexity,
+        f"brain_activated:{decision.primary_synapse or 'none'}",
+        skip_full_pipeline=decision.skip_full_pipeline,
+        use_retrieval=decision.complexity != "conversational",
+        suggested_tier=decision.tier,
+        needs_external_data=decision.needs_external_data,
+        capability_needs=decision.capability_needs,
+    )
 
 
 class ArnaldoKernel:
@@ -85,6 +114,7 @@ class ArnaldoKernel:
         self._runtime_inst: RuntimeAdapter | None = None
         self._gap_detector_inst: RealityGapDetector | None = None
         self._sandboxes_inst: SandboxManager | None = None
+        self.metrics = MetricsCollector()
 
         # Bootstrap: semeia grafo se vazio e persiste
         if bootstrap_graph(self.memory.load_graph()) > 0:
@@ -143,7 +173,9 @@ class ArnaldoKernel:
     @property
     def runtime(self) -> RuntimeAdapter:
         if self._runtime_inst is None:
-            self._runtime_inst = self._runtime_override or self._build_runtime(self._runtime_mode)
+            self._runtime_inst = self._runtime_override or _resolve_runtime(
+                self._runtime_mode, self._llm_client
+            )
         return self._runtime_inst
 
     @property
@@ -174,30 +206,52 @@ class ArnaldoKernel:
         llm_classify: bool = False,
     ) -> RunResult:
         run_id = new_id("run")
+        self.metrics = MetricsCollector()
         llm_for_classify = self._llm_client if llm_classify else None
-        complexity = classify_request(request, llm_client=llm_for_classify)
+        graph = self.memory.load_graph()
+
+        # Decay automático — throttle: máx 1x por hora
+        result = maybe_sweep_decay(graph)
+        if result and any(v > 0 for v in result.values()):
+            self.metrics.record_decay(sum(result.values()))
+            self.memory._persist_graph_state()
+
+        with self.metrics.phase("classify"):
+            decision = brain_activate(graph, request)
+            # Fallback: se grafo não tem ativação forte, usa classify_request
+            if decision.confidence < BRAIN_CONFIDENCE_THRESHOLD:
+                complexity = classify_request(request, graph=graph, llm_client=llm_for_classify)
+            else:
+                complexity = _decision_to_complexity(decision)
+        self.metrics.set_complexity(complexity.level)
         logger.debug("classify: level=%s reason=%s", complexity.level, complexity.reason)
 
         # === FAST PATH: conversacional → single LLM call ===
         if complexity.skip_full_pipeline and complexity.level == "conversational":
-            return self._fast_response(
-                request,
+            return fast_response(
+                request=request,
                 session_id=session_id,
                 autonomy=autonomy,
                 terms_accepted=terms_accepted,
                 run_id=run_id,
                 output_dir=output_dir,
+                sessions=self.sessions,
+                memory=self.memory,
+                llm_client=self._llm_client,
             )
 
         # === MEDIUM PATH: intermediate → retrieval + routing + 1 LLM call ===
         if complexity.skip_full_pipeline and complexity.level == "intermediate":
-            return self._medium_response(
-                request,
+            return medium_response(
+                request=request,
                 session_id=session_id,
                 autonomy=autonomy,
                 terms_accepted=terms_accepted,
                 run_id=run_id,
                 output_dir=output_dir,
+                sessions=self.sessions,
+                memory=self.memory,
+                llm_client=self._llm_client,
                 suggested_tier=complexity.suggested_tier,
             )
 
@@ -224,61 +278,6 @@ class ArnaldoKernel:
     def pending_proactive_count(self, session_id: str) -> int:
         return self.proactivity.pending_count(session_id=session_id)
 
-    # ── Fast / Medium path ───────────────────────────────────────────────
-
-    def _fast_response(
-        self,
-        request: str,
-        *,
-        session_id: str | None,
-        autonomy: str,
-        terms_accepted: bool | None,
-        run_id: str,
-        output_dir: Path,
-    ) -> RunResult:
-        return fast_response(
-            request=request,
-            session_id=session_id,
-            autonomy=autonomy,
-            terms_accepted=terms_accepted,
-            run_id=run_id,
-            output_dir=output_dir,
-            sessions=self.sessions,
-            memory=self.memory,
-            llm_client=self._llm_client,
-        )
-
-    def _medium_response(
-        self,
-        request: str,
-        *,
-        session_id: str | None,
-        autonomy: str,
-        terms_accepted: bool | None,
-        run_id: str,
-        output_dir: Path,
-        suggested_tier: str = "fast",
-    ) -> RunResult:
-        return medium_response(
-            request=request,
-            session_id=session_id,
-            autonomy=autonomy,
-            terms_accepted=terms_accepted,
-            run_id=run_id,
-            output_dir=output_dir,
-            sessions=self.sessions,
-            memory=self.memory,
-            llm_client=self._llm_client,
-            suggested_tier=suggested_tier,
-        )
-
-    def _synthesize_response(self, runtime_result: Any, request: str) -> str:
-        return synthesize_response(
-            runtime_result,
-            request,
-            self._llm_client,
-        )
-
     # ── Métodos privados auxiliares ──────────────────────────────────────
 
     def _build_runtime_organization(
@@ -290,11 +289,3 @@ class ArnaldoKernel:
         if isinstance(self.runtime, GraphRuntime):
             return _org.build_graph_native_organization(task, decision, capability_resolution)
         return self.organizations.generate(task, decision, capability_resolution)
-
-    def _build_runtime(self, runtime_mode: str | None) -> RuntimeAdapter:
-        mode = (runtime_mode or os.environ.get("ARNALDO_RUNTIME_MODE", "graph")).strip().lower()
-        if mode == "graph":
-            return GraphRuntime(llm_client=self._llm_client)
-        if mode == "multiagent":
-            return MultiAgentRuntime()
-        return LocalRuntime()

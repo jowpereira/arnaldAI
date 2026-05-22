@@ -68,6 +68,49 @@ class MemoryNode(GraphNode):
             **fields,
         )
 
+    @classmethod
+    def fact(cls, label: str, *, source: SourceRecord, **fields: Any) -> MemoryNode:
+        """Fato verificável e estável."""
+        payload = fields.pop("payload", {})
+        payload.setdefault("memory_type", "fact")
+        return cls.new(
+            label=label,
+            payload=payload,
+            source=source,
+            domain=fields.pop("domain", "factual"),
+            **fields,
+        )
+
+    @classmethod
+    def lesson(cls, label: str, *, source: SourceRecord, pattern: str = "", **fields: Any) -> MemoryNode:
+        """Lição aprendida de erro ou sucesso."""
+        payload = fields.pop("payload", {})
+        payload.setdefault("memory_type", "lesson")
+        if pattern:
+            payload["pattern"] = pattern
+        return cls.new(
+            label=label,
+            payload=payload,
+            source=source,
+            domain=fields.pop("domain", "procedural"),
+            **fields,
+        )
+
+    @classmethod
+    def execution(cls, label: str, *, source: SourceRecord, run_id: str = "", **fields: Any) -> MemoryNode:
+        """Log de execução/resultado de run."""
+        payload = fields.pop("payload", {})
+        payload.setdefault("memory_type", "execution")
+        if run_id:
+            payload["run_id"] = run_id
+        return cls.new(
+            label=label,
+            payload=payload,
+            source=source,
+            domain=fields.pop("domain", "operational"),
+            **fields,
+        )
+
 
 @dataclass(slots=True)
 class SynapseNode(GraphNode):
@@ -103,6 +146,9 @@ class SynapseNode(GraphNode):
         output_contract: dict[str, Any] | None = None,
         output_contract_model: type[Any] | None = None,
         activation_triggers: dict[str, Any] | None = None,
+        activation_pattern: dict[str, Any] | None = None,
+        inhibition_targets: list[str] | None = None,
+        specialization_depth: int = 0,
         tier_preference: str = "expert",
         **fields: Any,
     ) -> SynapseNode:
@@ -123,6 +169,12 @@ class SynapseNode(GraphNode):
             payload["output_contract"] = dict(output_contract)
         if activation_triggers is not None:
             payload["activation_triggers"] = dict(activation_triggers)
+        if activation_pattern is not None:
+            payload["activation_pattern"] = dict(activation_pattern)
+        if inhibition_targets is not None:
+            payload["inhibition_targets"] = list(inhibition_targets)
+        if specialization_depth > 0:
+            payload["specialization_depth"] = specialization_depth
         if output_contract_model is not None:
             from arnaldo.llm.structured import dataclass_to_schema
 
@@ -188,6 +240,7 @@ class CapabilityNode(GraphNode):
         module_path: str | None = None,
         maturity: str = "draft",
         risk_level: str = "medium",
+        requires_network: bool = False,
         **fields: Any,
     ) -> CapabilityNode:
         if maturity not in cls.MATURITY_LEVELS:
@@ -199,6 +252,7 @@ class CapabilityNode(GraphNode):
             module_path=module_path,
             maturity=maturity,
             risk_level=risk_level,
+            requires_network=requires_network,
         )
         # Peso inicial cresce com a maturidade
         weight = {
@@ -220,6 +274,11 @@ class CapabilityNode(GraphNode):
     @property
     def maturity(self) -> str:
         return str(self.payload.get("maturity", "draft"))
+
+    @property
+    def requires_network(self) -> bool:
+        """Whether this capability requires network access."""
+        return bool(self.payload.get("requires_network", False))
 
     def promote(self) -> CapabilityNode:
         """Avança um nível de maturidade. Idempotente em ``trusted``."""

@@ -155,26 +155,35 @@ class SessionContinuityTest(unittest.TestCase):
 class ClassifyWithLLMTest(unittest.TestCase):
     """Verifica que classificação com LLM funciona na zona ambígua."""
 
-    def test_ambiguous_request_uses_llm(self) -> None:
-        """Request ambíguo (1 creation verb, sem action intent) deve usar LLM."""
-
+    @staticmethod
+    def _mock_llm(complexity: str = "complex", needs_external: bool = False) -> Any:
         class MockLLM:
             is_configured = True
 
-            def chat(self, **kwargs: Any) -> SimpleNamespace:
-                return SimpleNamespace(content="complex")
+            def chat_typed(self, **kwargs: Any) -> SimpleNamespace:
+                parsed = SimpleNamespace(
+                    needs_external_data=needs_external,
+                    complexity=complexity,
+                    capability_needs=[],
+                    reasoning="mock",
+                )
+                return SimpleNamespace(is_success=True, parsed=parsed, refusal=None)
 
-        result = classify_request("melhore o sistema de cache", llm_client=MockLLM())
+            def chat(self, **kwargs: Any) -> SimpleNamespace:
+                return SimpleNamespace(content=complexity)
+
+        return MockLLM()
+
+    def test_ambiguous_request_uses_llm(self) -> None:
+        result = classify_request(
+            "melhore o sistema de cache", llm_client=self._mock_llm("complex")
+        )
         self.assertEqual(result.level, "complex")
 
     def test_ambiguous_request_llm_says_simple(self) -> None:
-        class MockLLM:
-            is_configured = True
-
-            def chat(self, **kwargs: Any) -> SimpleNamespace:
-                return SimpleNamespace(content="simple")
-
-        result = classify_request("melhore o sistema de cache", llm_client=MockLLM())
+        result = classify_request(
+            "melhore o sistema de cache", llm_client=self._mock_llm("intermediate")
+        )
         self.assertEqual(result.level, "intermediate")
 
     def test_clear_complex_skips_llm(self) -> None:

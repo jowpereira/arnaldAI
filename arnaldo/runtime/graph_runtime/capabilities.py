@@ -34,11 +34,11 @@ def _collect_tooling_targets(capability_resolution: Dict[str, Any]) -> Dict[str,
     degraded: set[str] = set()
     for item in capability_resolution.get("missing", []) or []:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.")):
+        if capability_id.startswith(("connector.", "tool.", "search.")):
             missing.add(capability_id)
     for item in capability_resolution.get("degraded", []) or []:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.")):
+        if capability_id.startswith(("connector.", "tool.", "search.")):
             degraded.add(capability_id)
     return {
         "missing": sorted(missing),
@@ -53,7 +53,7 @@ def _collect_tool_execution_targets(
     for bucket in ("available", "degraded", "missing"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if not capability_id.startswith(("connector.", "tool.")):
+            if not capability_id.startswith(("connector.", "tool.", "search.")):
                 continue
             module_path = _capability_module_path(item)
             if not module_path:

@@ -100,6 +100,22 @@ class EdgeKind(str, Enum):
     FORGED_BY = "forged_by"
     """Capability A foi forjada durante run B (proveniência)."""
 
+    # ── Categoria: Epistêmica (entre memórias) ───────────────────────────
+    CONTRADICTS = "contradicts"
+    """Memory A contradiz Memory B. Bidirecional para detecção de inconsistência."""
+
+    SUPERSEDES = "supersedes"
+    """Memory A substitui Memory B (versão mais recente do mesmo fato)."""
+
+    # ── Categoria: Cross-Layer (Agent ↔ Memory) ─────────────────────────
+    RECALLS = "recalls"
+    """Synapse → Memory: synapse ativa/recall uma memória.
+
+    Cross-layer Hebbian — reforça com co-ativação bem-sucedida."""
+
+    INFORMS = "informs"
+    """Memory → Synapse: memória informa/contextualiza synapse."""
+
     # ── Categoria: Composicional (intra-grafo) ───────────────────────────
     INCLUDES = "includes"
     """A inclui hierarquicamente B no mesmo grafo (composição estrutural).
@@ -124,6 +140,7 @@ class EdgeKind(str, Enum):
             EdgeKind.ACTIVATES,
             EdgeKind.COLLABORATED_WITH,
             EdgeKind.INHIBITS,
+            EdgeKind.RECALLS,
         }
 
     @property
@@ -148,6 +165,38 @@ class EdgeKind(str, Enum):
     def is_compositional(self) -> bool:
         """Relação de agregação/composição estrutural."""
         return self in {EdgeKind.INCLUDES, EdgeKind.PART_OF}
+
+    @property
+    def is_memory_internal(self) -> bool:
+        """Edge que conecta memórias entre si."""
+        return self in (
+            EdgeKind.TEMPORAL_BEFORE,
+            EdgeKind.SEMANTIC,
+            EdgeKind.DERIVED_FROM,
+            EdgeKind.CAUSAL,
+            EdgeKind.MENTIONS,
+            EdgeKind.IS_A,
+            EdgeKind.PART_OF,
+            EdgeKind.CONTRADICTS,
+            EdgeKind.SUPERSEDES,
+        )
+
+    @property
+    def is_agent_internal(self) -> bool:
+        """Edge que conecta synapses/capabilities entre si."""
+        return self in (
+            EdgeKind.ACTIVATES,
+            EdgeKind.COLLABORATED_WITH,
+            EdgeKind.INHIBITS,
+            EdgeKind.REQUIRES,
+            EdgeKind.FORBIDS,
+            EdgeKind.FORGED_BY,
+        )
+
+    @property
+    def is_cross_layer(self) -> bool:
+        """Edge que conecta Agent Layer ↔ Memory Layer."""
+        return self in (EdgeKind.RECALLS, EdgeKind.INFORMS)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -280,4 +329,8 @@ def _default_weight_for(kind: EdgeKind) -> float:
         EdgeKind.FORBIDS: 1.00,  # constraint hard
         EdgeKind.FORGED_BY: 1.00,  # proveniência — força máxima
         EdgeKind.INCLUDES: 0.85,  # composição estrutural — alta
+        EdgeKind.CONTRADICTS: 0.80,  # contradição forte
+        EdgeKind.SUPERSEDES: 0.90,  # substituição
+        EdgeKind.RECALLS: 0.30,  # cross-layer — precisa de evidência
+        EdgeKind.INFORMS: 0.40,  # cross-layer — contextualização
     }[kind]

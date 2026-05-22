@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -223,3 +224,57 @@ def top_n_tags(tag_index: dict[str, set[str]], n: int) -> list[tuple[str, int]]:
     """Retorna as ``n`` tags mais frequentes."""
     ranked = sorted(tag_index.items(), key=lambda kv: len(kv[1]), reverse=True)
     return [(tag, len(ids)) for tag, ids in ranked[:n]]
+
+
+# ── Persist / Load do CognitiveGraph ────────────────────────────────────
+
+
+def persist_graph(graph: Any, path: Path) -> Path:
+    """Serializa CognitiveGraph completo para msgpack."""
+    import msgpack
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    graph._event_ledger_path = path.parent / "graph_events.jsonl"
+    payload = {
+        "version": "cognitive-graph/v2",
+        "graph_id": graph._graph_id,
+        "nodes": [serialize_node(n) for n in graph._nodes.values()],
+        "edges": [serialize_edge(e) for e in graph._edges.values()],
+    }
+    with path.open("wb") as f:
+        msgpack.pack(payload, f, use_bin_type=True)
+    return path
+
+
+def load_graph(
+    path: Path,
+    *,
+    graph_cls: type | None = None,
+    plasticity: Any | None = None,
+    matcher: Any | None = None,
+    registry: Any | None = None,
+) -> Any:
+    """Desserializa CognitiveGraph de msgpack."""
+    import msgpack
+
+    with Path(path).open("rb") as f:
+        payload = msgpack.unpack(f, raw=False)
+    version = payload.get("version")
+    if version not in {"cognitive-graph/v1", "cognitive-graph/v2"}:
+        raise ValueError(f"Versão de schema desconhecida: {version}")
+    if graph_cls is None:
+        from .store import CognitiveGraph
+
+        graph_cls = CognitiveGraph
+    cog = graph_cls(
+        graph_id=payload.get("graph_id"),
+        plasticity=plasticity,
+        matcher=matcher,
+        registry=registry,
+    )
+    for n_data in payload["nodes"]:
+        cog.add_node(deserialize_node(n_data))
+    for e_data in payload["edges"]:
+        cog.add_edge(deserialize_edge(e_data))
+    return cog

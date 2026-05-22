@@ -62,20 +62,20 @@ Violar qualquer invariante ⇒ exceção na operação (não falha silenciosa).
 
 ```bash
 # Testes
-uv run pytest -x -v
+rtk uv run pytest -x -v
 
 # Linting
-uv run ruff check arnaldo/ tests/
-uv run ruff format arnaldo/ tests/
+rtk uv run ruff check arnaldo/ tests/
+rtk uv run ruff format arnaldo/ tests/
 
 # Type checking
-uv run mypy arnaldo/
+rtk uv run mypy arnaldo/
 
 # Run única
-uv run python -m arnaldo "Crie um plano para um SaaS B2B"
+rtk uv run python -m arnaldo "Crie um plano para um SaaS B2B"
 
 # Run com autonomia
-uv run python -m arnaldo "Analise o mercado" --autonomy autonomo
+rtk uv run python -m arnaldo "Analise o mercado" --autonomy autonomo
 ```
 
 # RTK — Token-Optimized CLI

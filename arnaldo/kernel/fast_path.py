@@ -56,12 +56,19 @@ def fast_response(
     resp = llm_client.chat(tier="fast", messages=messages)
     response_text = resp.content
 
-    # Learning real: aplica feedback ao grafo
+    # Learning real: aplica feedback ao grafo com cross-links
     graph = memory.load_graph()
-    activated = [m.get("id", "") for m in retrieval.relevant_memories if m.get("id")]
-    activated += [s.get("id", "") for s in retrieval.relevant_synapses if s.get("id")]
+    mem_ids = [m.get("id", "") for m in retrieval.relevant_memories if m.get("id")]
+    syn_ids = [s.get("id", "") for s in retrieval.relevant_synapses if s.get("id")]
+    activated = mem_ids + syn_ids
     if activated:
-        apply_learning_to_graph(graph, activated_node_ids=activated, feedback=feedback)
+        apply_learning_to_graph(
+            graph,
+            activated_node_ids=activated,
+            feedback=feedback,
+            synapse_ids=syn_ids,
+            memory_ids=mem_ids,
+        )
 
     # F0: Ingestão — toda conversa vira MemoryNode no grafo
     _remember_turn(memory, request, response_text, session.id)
@@ -141,11 +148,18 @@ def medium_response(
     resp = llm_client.chat(tier=tier, messages=messages)
     response_text = resp.content
 
-    # 7) Learning real — aplica feedback ao grafo
-    activated = [m.get("id", "") for m in retrieval.relevant_memories if m.get("id")]
-    activated += [s.get("id", "") for s in retrieval.relevant_synapses if s.get("id")]
+    # 7) Learning real — aplica feedback ao grafo com cross-links
+    mem_ids = [m.get("id", "") for m in retrieval.relevant_memories if m.get("id")]
+    syn_ids = [s.get("id", "") for s in retrieval.relevant_synapses if s.get("id")]
+    activated = mem_ids + syn_ids
     if activated:
-        apply_learning_to_graph(graph, activated_node_ids=activated, feedback=feedback)
+        apply_learning_to_graph(
+            graph,
+            activated_node_ids=activated,
+            feedback=feedback,
+            synapse_ids=syn_ids,
+            memory_ids=mem_ids,
+        )
 
     # 8) Ingestão — toda conversa vira MemoryNode no grafo
     _remember_turn(memory, request, response_text, session.id)

@@ -20,20 +20,28 @@ def write_pipeline_artifacts(
     sandbox: Any,
     tool_forge_report: Dict[str, Any],
     session: Any,
+    *,
+    minimal: bool = False,
 ) -> Dict[str, Any]:
     files: Dict[str, Any] = {
-        "adaptive_plan": store.write_json("adaptive-plan.json", to_dict(adaptive_plan)),
-        "intent_ir": store.write_json("intent-ir.json", to_dict(intent)),
         "task_ir": store.write_json("task-ir.json", to_dict(task)),
-        "cognitive_decision": store.write_json("cognitive-decision.json", to_dict(decision)),
-        "capability_resolution": store.write_json(
-            "capability-resolution.json", capability_resolution
-        ),
-        "organization_ir": store.write_json("organization-ir.json", to_dict(organization)),
-        "policy_decision": store.write_json("policy-decision.json", to_dict(policy)),
-        "sandbox_state": store.write_json("sandbox-state.json", to_dict(sandbox)),
         "session_state": store.write_json("session-state.json", sessions.snapshot(session)),
     }
+    if minimal:
+        return files
+    files.update(
+        {
+            "adaptive_plan": store.write_json("adaptive-plan.json", to_dict(adaptive_plan)),
+            "intent_ir": store.write_json("intent-ir.json", to_dict(intent)),
+            "cognitive_decision": store.write_json("cognitive-decision.json", to_dict(decision)),
+            "capability_resolution": store.write_json(
+                "capability-resolution.json", capability_resolution
+            ),
+            "organization_ir": store.write_json("organization-ir.json", to_dict(organization)),
+            "policy_decision": store.write_json("policy-decision.json", to_dict(policy)),
+            "sandbox_state": store.write_json("sandbox-state.json", to_dict(sandbox)),
+        }
+    )
     if tool_forge_report["created"] or tool_forge_report["failed"]:
         files["tool_forge_report"] = store.write_json("tool-forge-report.json", tool_forge_report)
     return files

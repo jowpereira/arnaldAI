@@ -37,7 +37,7 @@ def auto_forge_graph_capabilities(
         if capability_id in seen:
             continue
         seen.add(capability_id)
-        if not capability_id.startswith(("connector.", "tool.")):
+        if not capability_id.startswith(("connector.", "tool.", "search.")):
             continue
 
         maturity = str(item.get("maturity", "")).strip().lower() or "draft"

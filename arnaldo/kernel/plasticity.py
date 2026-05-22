@@ -131,3 +131,30 @@ def _reinforce_path_edges(
             if edge.target_id == tgt:
                 graph.record_outcome(src, success=True)
                 break
+
+
+# ── Decay automático com throttle ────────────────────────────────────────
+
+import logging
+import time
+
+_logger = logging.getLogger(__name__)
+_SWEEP_INTERVAL_S: float = 3600.0  # 1h entre sweeps
+_last_sweep: float = 0.0
+
+
+def maybe_sweep_decay(graph: CognitiveGraph) -> dict[str, int] | None:
+    """Executa sweep_decay com throttle temporal (máx 1x/hora)."""
+    global _last_sweep
+    now = time.monotonic()
+    if now - _last_sweep < _SWEEP_INTERVAL_S:
+        return None
+    _last_sweep = now
+    try:
+        counters = graph.sweep_decay()
+        if any(v > 0 for v in counters.values()):
+            _logger.info("sweep_decay: %s", counters)
+        return counters
+    except Exception:
+        _logger.debug("sweep_decay falhou", exc_info=True)
+        return None

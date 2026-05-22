@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from ..edges import GraphEdge
-from ..nodes import NodeKind, SynapseNode
+from ..nodes import SynapseNode
 from ..provenance import SourceRecord
 
 
 def detect_recurring_pattern(
-    message_history: List[Dict[str, Any]],
+    message_history: list[dict[str, Any]],
     *,
     min_occurrences: int = 2,
     window: int = 20,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Detecta padrões recorrentes no histórico de mensagens.
 
     Padrão = intent que aparece >= min_occurrences vezes no window.
@@ -26,8 +26,8 @@ def detect_recurring_pattern(
     user_messages = [m for m in recent if m.get("role") == "user"]
 
     # Conta intents
-    intent_counts: Dict[str, int] = {}
-    intent_examples: Dict[str, List[str]] = {}
+    intent_counts: dict[str, int] = {}
+    intent_examples: dict[str, list[str]] = {}
     for msg in user_messages:
         content = str(msg.get("content", ""))
         intent = classify_intent(content)
@@ -52,7 +52,7 @@ def detect_recurring_pattern(
 
 
 def spawn_synapse_for_pattern(
-    pattern: Dict[str, Any],
+    pattern: dict[str, Any],
     *,
     run_id: str,
 ) -> tuple[SynapseNode, GraphEdge | None]:
@@ -66,48 +66,42 @@ def spawn_synapse_for_pattern(
 
     source = SourceRecord.from_run(run_id, agent="synapse_spawner")
 
-    synapse = SynapseNode(
-        id=f"spawned-{intent}-{run_id[:8]}",
-        kind=NodeKind.SYNAPSE,
+    synapse = SynapseNode.specialist(
         label=f"Synapse especializado: {intent}",
+        id=f"spawned-{intent}",
+        role=f"handler_{intent}",
+        objective=f"Tratar padrão recorrente: {intent}",
+        tier_preference="fast",
         source=source,
         weight=0.4,  # Nasce com peso moderado (scaffolded)
-        payload={
-            "action": f"handle_{intent}",
-            "spawned": True,
-            "pattern_intent": intent,
-            "examples": examples,
-            "tier_preference": "fast",
-        },
+        action=f"handle_{intent}",
+        spawned=True,
+        pattern_intent=intent,
+        examples=examples,
     )
 
     return synapse, None
 
 
 def try_spawn_from_history(
-    message_history: List[Dict[str, Any]],
+    message_history: list[dict[str, Any]],
     existing_synapse_ids: set[str],
     *,
     run_id: str,
-) -> List[SynapseNode]:
+) -> list[SynapseNode]:
     """Tenta criar novos synapses baseado no histórico.
 
     Só cria se não existir synapse com mesmo pattern_intent.
     """
     patterns = detect_recurring_pattern(message_history)
-    new_synapses: List[SynapseNode] = []
+    new_synapses: list[SynapseNode] = []
 
     for pattern in patterns:
         intent = pattern["intent"]
-        expected_id = f"spawned-{intent}-{run_id[:8]}"
+        expected_id = f"spawned-{intent}"
 
         # Não duplica
         if expected_id in existing_synapse_ids:
-            continue
-
-        # Verifica se já existe synapse para este intent
-        has_existing = any(f"spawned-{intent}" in sid for sid in existing_synapse_ids)
-        if has_existing:
             continue
 
         synapse, _ = spawn_synapse_for_pattern(pattern, run_id=run_id)
