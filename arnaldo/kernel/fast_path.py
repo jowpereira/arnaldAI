@@ -204,14 +204,14 @@ def synthesize_response(runtime_result: Any, request: str, llm_client: Any) -> s
         resp = llm_client.chat(tier="fast", messages=messages)
         return resp.content
 
-    # Sem LLM: concatenação direta dos outputs
+    # Sem LLM: concatenação direta dos conteúdos reais
+    from arnaldo.prompts.context import _extract_step_content
+
     parts: list[str] = []
     for step in steps:
-        output = step.get("output", step.get("summary", ""))
-        if isinstance(output, dict):
-            output = str(output.get("summary", output.get("content", str(output))))
-        if output:
-            parts.append(str(output)[:500])
+        content = _extract_step_content(step)
+        if content:
+            parts.append(content[:500])
     return "\n\n".join(parts) if parts else "Execução concluída."
 
 

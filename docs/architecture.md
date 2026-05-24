@@ -2076,14 +2076,12 @@ Fontes prioritárias por domínio:
 ### 17.7 Status atual
 
 ```
-[ ] EpistemicGapAnalyzer    — não implementado
-[ ] CuriosityEngine          — não implementado
-[ ] WebForager              — não implementado
-[ ] KnowledgeIngester       — não implementado
+[X] EpistemicGapAnalyzer    — arnaldo/episteme/gap_analyzer.py (Fase 2)
+[X] CuriosityEngine         — arnaldo/episteme/curiosity.py (Fase 2)
+[X] WebForager              — arnaldo/episteme/forager.py (Fase 2)
+[X] KnowledgeIngester       — arnaldo/episteme/ingester.py (Fase 2)
 [X] CognitiveGraph          — substrate pronto (Fase 2)
 ```
-
-Implementação prevista para Fase 4 (após estabilização do substrate).
 
 ---
 

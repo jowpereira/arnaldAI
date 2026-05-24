@@ -169,6 +169,7 @@ def run_with_live_streaming(
             output_dir=output_dir,
             session_id=session_id,
             terms_accepted=terms_accepted,
+            llm_classify=True,
         )
 
     known_run_dirs = list_run_dir_names(output_dir)
@@ -182,6 +183,7 @@ def run_with_live_streaming(
             output_dir=output_dir,
             session_id=session_id,
             terms_accepted=terms_accepted,
+            llm_classify=True,
         )
         while not future.done():
             streamer.poll()

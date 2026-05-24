@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -48,14 +49,13 @@ class CapabilityBase(Protocol):
 def timed_execution(func: Any) -> Any:
     """Decorator que mede latência de execução."""
 
+    @functools.wraps(func)
     def wrapper(self: Any, params: dict[str, Any]) -> CapabilityResult:
         start = time.monotonic()
         result = func(self, params)
         result.latency_ms = (time.monotonic() - start) * 1000
         return result
 
-    wrapper.__name__ = func.__name__
-    wrapper.__doc__ = func.__doc__
     return wrapper
 
 

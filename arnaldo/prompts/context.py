@@ -65,9 +65,7 @@ Pedido original: %s
     # Compila resultados dos steps
     step_lines: list[str] = []
     for idx, step in enumerate(step_results, 1):
-        output = step.get("output", step.get("summary", ""))
-        if isinstance(output, dict):
-            output = str(output.get("summary", output.get("content", str(output))))
+        output = _extract_step_content(step)
         status = "OK" if step.get("success", True) else "FALHOU"
         step_lines.append(f"[Step {idx} ({status})]: {str(output)[:500]}")
 
@@ -77,3 +75,48 @@ Pedido original: %s
         {"role": "system", "content": "Você sintetiza resultados em texto fluido e direto."},
         {"role": "user", "content": content},
     ]
+
+
+def _extract_step_content(step: Dict[str, Any]) -> str:
+    """Extrai conteúdo textual real de um step — nunca usa nome de deliverable."""
+    result = step.get("result")
+    if isinstance(result, dict) and result:
+        for key in ("summary", "content"):
+            val = result.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        sections = result.get("sections")
+        if isinstance(sections, list) and sections:
+            first = sections[0]
+            if isinstance(first, dict):
+                return str(first.get("content", first.get("summary", str(first))))
+            if isinstance(first, str) and first.strip():
+                return first
+        return str(result)
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    summary = step.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return summary.strip()
+    # Fallback: output, mas rejeita nomes de deliverable conhecidos
+    output = step.get("output", "")
+    if isinstance(output, dict):
+        return str(output.get("summary", output.get("content", str(output))))
+    output_str = str(output)
+    if output_str in _KNOWN_DELIVERABLE_IDS:
+        return ""
+    return output_str
+
+
+# IDs de deliverable que NUNCA devem vazar para resposta ao usuário
+_KNOWN_DELIVERABLE_IDS = frozenset(
+    {
+        "primary_artifact",
+        "execution_evidence",
+        "next_actions",
+        "draft_artifact",
+        "critic_review",
+        "risk_review",
+        "decision_synthesis",
+    }
+)

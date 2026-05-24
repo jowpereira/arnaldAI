@@ -198,6 +198,19 @@ class ProactivityManager:
                 )
                 scheduled += 1 if created else 0
 
+        # Trigger: knowledge gap detectado mas não resolvido nesta run
+        gap_type = str(getattr(task, "gap_type", "")).strip()
+        if gap_type and gap_type != "none":
+            created = self.schedule(
+                session_id=sid,
+                kind="research",
+                priority=0.75,
+                delay_seconds=10,
+                message=f"{vocative}percebi que há uma lacuna sobre isso. Quer que eu pesquise mais a fundo?",
+                metadata={"run_id": run_id, "source": "knowledge_gap", "gap_type": gap_type},
+            )
+            scheduled += 1 if created else 0
+
         # Fallback: se nenhum trigger específico, agenda follow-up genérico
         if scheduled == 0:
             goal = task.goal if isinstance(getattr(task, "goal", None), dict) else {}

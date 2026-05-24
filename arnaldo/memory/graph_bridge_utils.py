@@ -39,6 +39,10 @@ def domain_for_record(kind: str, payload: dict[str, Any]) -> str:
         return "episodic"
     if kind == "procedural":
         return "procedural"
+    if kind == "prospective":
+        return "prospective"
+    if kind == "negative":
+        return "negative"
     base = str(payload.get("domain", "")).strip()
     return base or "semantic_stable"
 
@@ -57,7 +61,7 @@ def related_memories(
     capability_id = str(payload.get("capability_id", "")).strip()
     tokens = tokenize_payload(payload)
     scored: list[tuple[str, float, Any]] = []
-    for node in graph.iter_nodes(kind=NodeKind.MEMORY, active_only=False):
+    for node in graph.iter_nodes(kind=NodeKind.MEMORY, active_only=True):
         if node.id == node_id:
             continue
         node_payload = node.payload if isinstance(node.payload, dict) else {}

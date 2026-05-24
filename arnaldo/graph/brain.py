@@ -25,6 +25,8 @@ from .edges import EdgeKind
 from .matching import HybridMatcher, MatchResult
 from .nodes import NodeKind
 
+from arnaldo.episteme.signals import GapType
+
 if TYPE_CHECKING:
     from .store import CognitiveGraph
 
@@ -60,6 +62,9 @@ class BrainDecision:
 
     knowledge_gap: bool = False
     """Se True, o brain detectou gap de conhecimento — considere busca externa."""
+
+    gap_type: GapType = GapType.NONE
+    """Tipo de gap detectado — NONE, GENUINE, DECAYED ou RETRIEVAL_MISS."""
 
 
 def activate(
@@ -129,7 +134,8 @@ def activate(
 
     # G17: Gap detection
     confidence = primary.score if primary else 0.0
-    has_gap = _detect_knowledge_gap(confidence, memories)
+    gap_type = _detect_knowledge_gap(confidence, memories, graph)
+    has_gap = gap_type != GapType.NONE
 
     return BrainDecision(
         primary_synapse=primary.node.id if primary else None,
@@ -142,6 +148,7 @@ def activate(
         activated_memories=memories[:max_memories],
         confidence=confidence,
         knowledge_gap=has_gap,
+        gap_type=gap_type,
     )
 
 

@@ -22,6 +22,8 @@
 - **Camada 4 — Execução:** RuntimeAdapter (Local, Graph, MultiAgent) + Sandbox + PolicyEngine
 - **Camada 5 — Evolução:** EvidenceLedger, PlasticityEngine, sweep_decay
 - **Camada 6 — Episteme:** GapAnalyzer, CuriosityEngine, WebForager (Fase 4+)
+- [2025-07] Camada 6 implementada completa: EpistemicGapAnalyzer, CuriosityEngine (prioridade contextual), KnowledgeIngester (entidades), WebForager (governance), consolidação episodic→semantic
+- [2025-07] Grafo: ExecutionSynapseCandidate tracker + materialização, agent memory isolation via GraphRef.OWNED, recursive plasticity wiring
 
 ## Módulos Principais
 

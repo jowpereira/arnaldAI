@@ -120,6 +120,16 @@ def default_capabilities() -> List[Capability]:
         capability(
             "evidence.record", "Record Evidence", "registrar eventos e decisoes em ledger local"
         ),
+        capability(
+            "filesystem.local.search",
+            "Filesystem Search",
+            "buscar arquivos e diretorios no filesystem local",
+        ),
+        capability(
+            "shell.local.readonly",
+            "Local Shell (read-only)",
+            "executar comandos read-only no shell local",
+        ),
     ]
 
 

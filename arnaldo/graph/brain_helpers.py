@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from arnaldo.constants.discovery_terms import LOCAL_CAPABILITY_PREFIXES
+from arnaldo.episteme.signals import GapType
+
 from .edges import EdgeKind
 from .matching import MatchResult
-from .nodes import NodeKind
+from .nodes import NodeKind, NodeStatus
 
 if TYPE_CHECKING:
     from .store import CognitiveGraph
@@ -63,27 +66,39 @@ def apply_memory_modulation(
 
 def check_needs_external(graph: CognitiveGraph, cap_needs: list[str]) -> bool:
     """G1: Verifica se alguma capability requer rede — via campo explícito + fallback prefix."""
+    cap_index = {
+        node.payload.get("capability_id"): node
+        for node in graph.iter_nodes(kind=NodeKind.CAPABILITY, active_only=True)
+        if isinstance(node.payload, dict)
+    }
     for cap_id in cap_needs:
-        # Prioridade: campo requires_network no nó
-        for node in graph.iter_nodes(kind=NodeKind.CAPABILITY, active_only=True):
-            if node.payload.get("capability_id") == cap_id:
-                if node.payload.get("requires_network", False):
-                    return True
-                break
-        # Fallback: heurística de prefixo para caps sem campo explícito
+        node = cap_index.get(cap_id)
+        if node is not None and node.payload.get("requires_network", False):
+            return True
         if cap_id.startswith(("search.", "connector.")):
             return True
     return False
 
 
-def detect_knowledge_gap(confidence: float, memories: list[MatchResult]) -> bool:
-    """G17: Detecta se o brain não tem conhecimento suficiente."""
+def detect_knowledge_gap(
+    confidence: float,
+    memories: list[MatchResult],
+    graph: CognitiveGraph | None = None,
+) -> GapType:
+    """G17: Detecta tipo de lacuna de conhecimento no brain."""
     if confidence >= _GAP_CONFIDENCE_THRESHOLD:
-        return False
+        return GapType.NONE
     if not memories:
-        return True
+        return GapType.GENUINE
     max_mem_score = max(m.score for m in memories)
-    return max_mem_score < _GAP_MEMORY_SCORE_THRESHOLD
+    if max_mem_score < _GAP_MEMORY_SCORE_THRESHOLD:
+        # Verifica se há nós STALE/ARCHIVED — indica decaimento
+        if graph is not None:
+            for m in memories:
+                if m.node.status in (NodeStatus.STALE, NodeStatus.ARCHIVED):
+                    return GapType.DECAYED
+        return GapType.GENUINE
+    return GapType.RETRIEVAL_MISS
 
 
 def discover_capabilities(
@@ -151,9 +166,12 @@ def derive_complexity(
         return "intermediate", True, "fast"
 
     if cap_needs:
+        # Capabilities locais executáveis devem usar full pipeline com tooling
+        has_local_caps = any(c.startswith(LOCAL_CAPABILITY_PREFIXES) for c in cap_needs)
+        skip = not has_local_caps  # skip=False quando há caps locais
         return (
             "intermediate",
-            True,
+            skip,
             primary.node.payload.get("tier_preference", "expert"),
         )
 

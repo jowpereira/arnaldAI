@@ -23,6 +23,7 @@ class EventKind(Enum):
     WEIGHT_UPDATED = "weight_updated"
     STATUS_CHANGED = "status_changed"
     CONSOLIDATION = "consolidation"
+    CAPABILITY_EXECUTED = "capability_executed"
 
 
 @dataclass(slots=True)

@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 import re
 
+from arnaldo.constants.discovery_terms import (
+    ALL_LOCAL_DISCOVERY_TERMS,
+    SHELL_CONTEXT_NOUNS,
+    SHELL_EXECUTION_VERBS,
+)
 from arnaldo.contracts import new_id, utc_now
 from arnaldo.session import SessionState
 
@@ -179,6 +184,25 @@ def infer_capability_hints(text: str) -> List[Dict[str, Any]]:
                 "reason": "pedido_indica_busca_externa",
             }
         )
+    # Descoberta local: filesystem / shell / comandos
+    if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in ALL_LOCAL_DISCOVERY_TERMS):
+        hints.append(
+            {
+                "id": "filesystem.local.search",
+                "required": True,
+                "reason": "pedido_indica_descoberta_local",
+            }
+        )
+    # Shell local: verbos de execução ou substantivos de terminal
+    _shell_terms = (*SHELL_EXECUTION_VERBS, *SHELL_CONTEXT_NOUNS)
+    if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in _shell_terms):
+        hints.append(
+            {
+                "id": "shell.local.readonly",
+                "required": False,
+                "reason": "pedido_indica_execucao_local",
+            }
+        )
     return dedupe_hints(hints)
 
 
@@ -233,14 +257,19 @@ def build_priority_actions(
 
 
 def should_forge(text: str, capability_hints: List[Dict[str, Any]], session: SessionState) -> bool:
+    from arnaldo.capabilities.registry import _BUILTIN_CAPABILITIES
+
     lowered = text.lower()
     if any(
         term in lowered
         for term in ["crie ferramenta", "desenvolve ferramenta", "conector", "integra"]
     ):
         return True
+    # Filtrar builtins — não forjar o que já existe
     if capability_hints:
-        return True
+        missing = [h for h in capability_hints if h["id"] not in _BUILTIN_CAPABILITIES]
+        if missing:
+            return True
     return False
 
 

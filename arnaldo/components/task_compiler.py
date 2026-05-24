@@ -8,7 +8,13 @@ from arnaldo.contracts import IntentIR, TaskIR, new_id, utc_now
 class TaskCompiler:
     """Builds a versioned Task IR without binding the system to a fixed subject area."""
 
-    def compile(self, intent: IntentIR, retrieval: Any = None) -> TaskIR:
+    def compile(
+        self,
+        intent: IntentIR,
+        retrieval: Any = None,
+        *,
+        extra_capability_needs: List[str] | None = None,
+    ) -> TaskIR:
         # Enriquece contexto com retrieval quando disponível
         context_enrichment: Dict[str, Any] = {}
         if retrieval is not None and hasattr(retrieval, "has_context") and retrieval.has_context:
@@ -54,7 +60,7 @@ class TaskCompiler:
             ],
             autonomy=intent.autonomy,
             risk=build_risk(intent.signals),
-            capability_needs=build_capability_needs(),
+            capability_needs=build_capability_needs(extra_capability_needs),
             uncertainty=[
                 {"question": question, "blocking": False} for question in intent.open_questions
             ],
@@ -91,8 +97,10 @@ def build_risk(signals: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_capability_needs() -> List[Dict[str, Any]]:
-    return [
+def build_capability_needs(
+    extra_needs: List[str] | None = None,
+) -> List[Dict[str, Any]]:
+    base = [
         {"id": "intent.structure", "required": True},
         {"id": "work.decompose", "required": True},
         {"id": "organization.generate", "required": True},
@@ -100,6 +108,12 @@ def build_capability_needs() -> List[Dict[str, Any]]:
         {"id": "validation.critic_review", "required": True},
         {"id": "evidence.record", "required": True},
     ]
+    existing_ids = {item["id"] for item in base}
+    for cap_id in extra_needs or []:
+        if cap_id not in existing_ids:
+            base.append({"id": cap_id, "required": True})
+            existing_ids.add(cap_id)
+    return base
 
 
 def score_to_level(score: int) -> str:

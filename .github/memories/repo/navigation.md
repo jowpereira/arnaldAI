@@ -26,6 +26,10 @@
 | Workflows | `arnaldo/graph/workflows.py` |
 | Pattern matching | `arnaldo/graph/matching.py` |
 | Engine de execução | `arnaldo/graph/execution.py` |
+| Synapse candidates | `arnaldo/graph/synapse_candidates.py` → `ExecutionSynapseTracker` |
+| Agent subgraphs | `arnaldo/graph/agent_subgraphs.py` → `ensure_agent_subgraph` |
+| Graph hierarchy ops | `arnaldo/graph/hierarchy.py` → `attach_subgraph`, `record_outcome_recursive` |
+| Graph registry | `arnaldo/graph/registry.py` → `GraphRegistry` |
 
 ## Pipeline do Kernel
 
@@ -60,6 +64,26 @@
 | Runtime local | `arnaldo/runtime/local.py` → `LocalRuntime` |
 | Runtime multi-agente | `arnaldo/runtime/multiagent.py` → `MultiAgentRuntime` |
 | Sandbox | `arnaldo/runtime/sandbox.py` |
+
+## Episteme (Camada 6)
+
+| O quê | Onde |
+| --- | --- |
+| Gap analyzer | `arnaldo/episteme/gap_analyzer.py` → `EpistemicGapAnalyzer` |
+| Curiosity engine | `arnaldo/episteme/curiosity.py` → `CuriosityEngine` |
+| Entity extraction | `arnaldo/episteme/entity_extraction.py` → `extract_entities` |
+| Knowledge ingester | `arnaldo/episteme/ingester.py` → `KnowledgeIngester` |
+| Forager policy | `arnaldo/episteme/forager.py` → `ForagerPolicy` |
+| Curiosity signals | `arnaldo/episteme/signals.py` → `CuriositySignal`, `GapType` |
+
+## Memory
+
+| O quê | Onde |
+| --- | --- |
+| Memory store | `arnaldo/memory/store.py` → `MemoryStore` |
+| Memory models | `arnaldo/memory/models.py` → `MemoryRecord`, `MemorySynapseCandidate` |
+| Graph bridge | `arnaldo/memory/graph_bridge.py` → `to_memory_node` |
+| Consolidation | `arnaldo/memory/consolidation.py` → `consolidate_episodic_memories` |
 
 ## Memória e Sessão
 

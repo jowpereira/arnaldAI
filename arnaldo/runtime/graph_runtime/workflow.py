@@ -20,6 +20,7 @@ from .classify import (
 from .capabilities import (
     _capability_module_path,
     _infer_capability_id_from_output,
+    _TOOLING_PREFIXES,
 )
 from .infra import (
     _normalize_float,
@@ -89,14 +90,14 @@ def _materialize_runtime_workflow(
     for bucket in ("available", "degraded", "missing"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if capability_id.startswith(("connector.", "tool.", "search.")):
+            if capability_id.startswith(_TOOLING_PREFIXES):
                 tooling_id_by_slug[_slug(capability_id)] = capability_id
                 module_path = _capability_module_path(item)
                 if module_path:
                     module_path_by_capability[capability_id] = module_path
     for item in task.capability_needs:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.", "search.")):
+        if capability_id.startswith(_TOOLING_PREFIXES):
             tooling_id_by_slug[_slug(capability_id)] = capability_id
 
     workflow: list[Dict[str, Any]] = []

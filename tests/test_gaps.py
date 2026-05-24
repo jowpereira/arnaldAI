@@ -13,6 +13,7 @@ from arnaldo.graph.brain_helpers import (
 )
 from arnaldo.graph.edges import GraphEdge
 from arnaldo.graph.intent import INTENT_TO_EDGES, classify_intent
+from arnaldo.episteme.signals import GapType
 from arnaldo.graph.matching import MatchResult
 from arnaldo.graph.node_types import CapabilityNode, MemoryNode, SynapseNode
 from arnaldo.graph.provenance import SourceRecord
@@ -191,20 +192,20 @@ class TestG4LLMCodex:
 
 class TestG17GapDetection:
     def test_high_confidence_no_gap(self) -> None:
-        assert detect_knowledge_gap(0.5, []) is False
+        assert detect_knowledge_gap(0.5, []) == GapType.NONE
 
     def test_low_confidence_no_memories_is_gap(self) -> None:
-        assert detect_knowledge_gap(0.1, []) is True
+        assert detect_knowledge_gap(0.1, []) != GapType.NONE
 
     def test_low_confidence_low_memory_score_is_gap(self) -> None:
         node = MemoryNode.semantic(label="test", id="m1", source=_BOOT)
         mem = MatchResult(node=node, score=0.1)
-        assert detect_knowledge_gap(0.1, [mem]) is True
+        assert detect_knowledge_gap(0.1, [mem]) != GapType.NONE
 
     def test_low_confidence_high_memory_score_no_gap(self) -> None:
         node = MemoryNode.semantic(label="test", id="m1", source=_BOOT)
         mem = MatchResult(node=node, score=0.5)
-        assert detect_knowledge_gap(0.1, [mem]) is False
+        assert detect_knowledge_gap(0.1, [mem]) == GapType.RETRIEVAL_MISS
 
     def test_brain_decision_has_knowledge_gap_field(self) -> None:
         g = CognitiveGraph()

@@ -5,6 +5,16 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from arnaldo.constants.discovery_terms import (
+    AMBIGUOUS_VERBS,
+    FILESYSTEM_DISCOVERY_VERBS,
+    LOCAL_CONTEXT_NOUNS,
+    SHELL_CONTEXT_NOUNS,
+    SHELL_EXECUTION_VERBS,
+    TECHNICAL_CONTEXT,
+    TOOLING_PREFIXES,
+)
+
 
 def _is_lightweight_conversational_task(task: Any) -> bool:
     goal = task.goal if isinstance(task.goal, dict) else {}
@@ -94,7 +104,7 @@ def _is_latency_sensitive_cli_turn(
     for bucket in ("missing", "degraded"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if capability_id.startswith(("connector.", "tool.", "search.")):
+            if capability_id.startswith(TOOLING_PREFIXES):
                 return False
     return True
 
@@ -135,7 +145,7 @@ def _is_conversational_cli_turn(
         for bucket in ("missing", "degraded"):
             for item in capability_resolution.get(bucket, []) or []:
                 capability_id = str(item.get("id", "")).strip()
-                if capability_id.startswith(("connector.", "tool.")):
+                if capability_id.startswith(TOOLING_PREFIXES):
                     return False
     if _word_count(request) > 36 and not _is_lightweight_conversational_task(task):
         return False
@@ -150,7 +160,9 @@ def _contains_structured_execution_intent(text: str) -> bool:
     candidate = str(text).lower()
     if not candidate:
         return False
-    patterns = (
+
+    # Patterns inequívocos — match direto, sem co-ocorrência
+    unambiguous_patterns = (
         r"\bapi\b",
         r"\bconector\b",
         r"\bconnector\b",
@@ -160,19 +172,40 @@ def _contains_structured_execution_intent(text: str) -> bool:
         r"\bintegrar\b",
         r"\bimplement(?:ar|acao|ação)\b",
         r"\bdesenvolver\b",
-        r"\bcriar\b",
         r"\bprojetar\b",
         r"\barquitetura\b",
-        r"\bmem[oó]ria\b",
         r"\bgrafo\b",
-        r"\bsistema\b",
         r"\bc[oó]digo\b",
         r"\bbackend\b",
         r"\bfrontend\b",
         r"\brl\b",
         r"\breinforcement\b",
     )
-    return any(re.search(pattern, candidate) for pattern in patterns)
+    if any(re.search(p, candidate) for p in unambiguous_patterns):
+        return True
+
+    # Verbos de descoberta local — match direto
+    for verb in FILESYSTEM_DISCOVERY_VERBS:
+        if re.search(rf"\b{re.escape(verb)}\b", candidate):
+            return True
+
+    # Verbos de execução shell — match direto
+    for verb in SHELL_EXECUTION_VERBS:
+        if re.search(rf"\b{re.escape(verb)}\b", candidate):
+            return True
+
+    # Substantivos de contexto local/shell — match direto
+    for noun in (*LOCAL_CONTEXT_NOUNS, *SHELL_CONTEXT_NOUNS):
+        if re.search(rf"\b{re.escape(noun)}\b", candidate):
+            return True
+
+    # Verbos ambíguos ("criar", "abrir", "mostrar") — SÓ com co-ocorrência técnica
+    for verb in AMBIGUOUS_VERBS:
+        if re.search(rf"\b{re.escape(verb)}\b", candidate):
+            if any(ctx in candidate for ctx in TECHNICAL_CONTEXT):
+                return True
+
+    return False
 
 
 def _default_agent_for_action(action: str) -> str:

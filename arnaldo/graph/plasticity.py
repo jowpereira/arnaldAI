@@ -111,6 +111,7 @@ class DecayPolicy:
             "episodic": timedelta(days=7),
             "negative": timedelta(days=30),
             "semantic_tech": timedelta(days=30),
+            "prospective": timedelta(days=3),
             "capability": timedelta(days=90),
             "semantic_stable": timedelta(days=180),
             "factual": timedelta(days=180),

@@ -82,7 +82,9 @@ class ProactivityManagerTest(unittest.TestCase):
                 context={"raw_request": "analise o problema"},
                 uncertainty=[{"question": "qual hipótese devemos testar primeiro?"}],
             )
-            adaptive_plan = SimpleNamespace(inferred_objectives=["melhorar continuidade conversacional"])
+            adaptive_plan = SimpleNamespace(
+                inferred_objectives=["melhorar continuidade conversacional"]
+            )
 
             created = manager.schedule_from_run(
                 session=session,
@@ -92,6 +94,38 @@ class ProactivityManagerTest(unittest.TestCase):
             )
             self.assertGreaterEqual(created, 1)
             self.assertGreaterEqual(manager.pending_count(session_id="sessao_obj"), 1)
+
+    def test_schedule_from_run_with_gap_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ProactivityManager(base_dir=Path(tmp))
+            session = SimpleNamespace(
+                id="sessao_gap",
+                turns=2,
+                learned_preferences={},
+                active_objectives=[],
+            )
+            task = SimpleNamespace(
+                goal={"type": "analyze_or_evaluate", "statement": "pesquisa avançada"},
+                context={"raw_request": "explique como funciona a computação quântica em detalhe"},
+                uncertainty=[],
+                gap_type="genuine",
+            )
+            adaptive_plan = SimpleNamespace(inferred_objectives=[])
+
+            created = manager.schedule_from_run(
+                session=session,
+                task=task,
+                adaptive_plan=adaptive_plan,
+                run_id="run_gap",
+            )
+            self.assertGreaterEqual(created, 1)
+            # Verifica que agendou mensagem de pesquisa (pending, ainda não due)
+            self.assertGreaterEqual(manager.pending_count(session_id="sessao_gap"), 1)
+            # Verifica conteúdo via load direto
+            records = manager._load_records_locked("sessao_gap")
+            research_msgs = [r for r in records if r.get("kind") == "research"]
+            self.assertGreaterEqual(len(research_msgs), 1)
+            self.assertIn("lacuna", research_msgs[0]["message"])
 
 
 if __name__ == "__main__":

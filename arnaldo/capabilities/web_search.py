@@ -49,7 +49,7 @@ class WebSearchCapability:
 
         try:
             results = _search_ddg(query, max_results=max_results)
-        except Exception as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             logger.warning("web search falhou: %s", exc)
             return CapabilityResult(
                 success=False,

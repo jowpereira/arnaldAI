@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Dict, List
 
 from arnaldo.graph import (
@@ -11,6 +13,7 @@ from arnaldo.graph import (
     NodeStatus,
     SynapseNode,
 )
+from arnaldo.graph.hierarchy import record_outcome_recursive
 
 
 def apply_post_run_plasticity(
@@ -54,11 +57,15 @@ def apply_post_run_plasticity(
     if run_success:
         _reinforce_path_edges(graph, step_results)
 
+    # Plasticidade recursiva em sub-grafos
+    recursive_report = apply_recursive_plasticity(graph, step_results, run_success)
+
     return {
         "updated_synapses": updated_synapses,
         "consolidated": consolidated,
         "inhibits_created": inhibits_created,
         "run_success": run_success,
+        "recursive_updates": recursive_report.get("recursive_updates", 0),
     }
 
 
@@ -133,10 +140,53 @@ def _reinforce_path_edges(
                 break
 
 
-# ── Decay automático com throttle ────────────────────────────────────────
+# ── Plasticidade recursiva em sub-grafos ─────────────────────────────────
 
-import logging
-import time
+
+def collect_scoped_activations(
+    step_results: List[Dict[str, Any]],
+) -> dict[str, set[str]]:
+    """Agrupa node_ids ativados por subgraph_id."""
+    scoped: dict[str, set[str]] = {}
+    for result in step_results:
+        sg_id = result.get("subgraph_id")
+        node_id = result.get("node_id")
+        if sg_id and node_id:
+            scoped.setdefault(str(sg_id), set()).add(str(node_id))
+    return scoped
+
+
+def apply_recursive_plasticity(
+    graph: CognitiveGraph,
+    step_results: List[Dict[str, Any]],
+    run_success: bool,
+) -> Dict[str, Any]:
+    """Propaga plasticidade para sub-grafos com ativações scoped."""
+    activations = collect_scoped_activations(step_results)
+    if not activations:
+        return {"recursive_updates": 0}
+
+    updates = 0
+    for result in step_results:
+        node_id = str(result.get("node_id", "")).strip()
+        sg_id = result.get("subgraph_id")
+        if not node_id or not sg_id:
+            continue
+        if not graph.has_node(node_id):
+            continue
+        step_success = bool(result.get("success", False))
+        record_outcome_recursive(
+            graph,
+            node_id,
+            success=step_success,
+            scoped_activations=activations,
+        )
+        updates += 1
+
+    return {"recursive_updates": updates}
+
+
+# ── Decay automático com throttle ────────────────────────────────────────
 
 _logger = logging.getLogger(__name__)
 _SWEEP_INTERVAL_S: float = 3600.0  # 1h entre sweeps

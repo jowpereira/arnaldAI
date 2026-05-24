@@ -100,7 +100,9 @@ def test_memory_store_record_feedback_updates_materialized_synapse() -> None:
         assert isinstance(synapse, SynapseNode)
         assert synapse.payload.get("support", 0) >= 2
 
-        mentions_edges = list(graph.iter_edges_from(synapse_id, kinds=[EdgeKind.MENTIONS], active_only=False))
+        mentions_edges = list(
+            graph.iter_edges_from(synapse_id, kinds=[EdgeKind.MENTIONS], active_only=False)
+        )
         assert any(edge.target_id == "mem_target" for edge in mentions_edges)
 
 
@@ -152,8 +154,7 @@ def test_memory_store_builds_workflow_hints_from_memory_graph() -> None:
         assert "decompose_work" in preferred
         transitions = hints["transitions"]
         assert any(
-            item["source_action"] == "frame_intent"
-            and item["target_action"] == "decompose_work"
+            item["source_action"] == "frame_intent" and item["target_action"] == "decompose_work"
             for item in transitions
         )
 
@@ -239,3 +240,82 @@ def test_memory_synapse_candidate_from_dict_handles_null_materialized_synapse() 
     )
     assert candidate.materialized_synapse_id is None
     assert candidate.is_materialized is False
+
+
+# ── GAP 8: Bayesian success_rate ─────────────────────────────────────
+
+
+def test_synapse_candidate_success_rate_laplace_default() -> None:
+    """Sem observações, success_rate = (0+1)/(0+0+2) = 0.5."""
+    c = MemorySynapseCandidate(source_memory_id="a", target_memory_id="b")
+    assert c.successes == 0
+    assert c.failures == 0
+    assert abs(c.success_rate - 0.5) < 1e-9
+
+
+def test_synapse_candidate_register_observation_classifies_success() -> None:
+    """reward > 0.5 incrementa successes."""
+    c = MemorySynapseCandidate(source_memory_id="a", target_memory_id="b")
+    c.register_observation(reward=0.8)
+    assert c.successes == 1
+    assert c.failures == 0
+    assert c.success_rate > 0.5
+
+
+def test_synapse_candidate_register_observation_classifies_failure() -> None:
+    """reward < 0.5 incrementa failures."""
+    c = MemorySynapseCandidate(source_memory_id="a", target_memory_id="b")
+    c.register_observation(reward=0.2)
+    assert c.successes == 0
+    assert c.failures == 1
+    assert c.success_rate < 0.5
+
+
+def test_synapse_candidate_register_observation_neutral_no_change() -> None:
+    """reward == 0.5 não incrementa nem successes nem failures."""
+    c = MemorySynapseCandidate(source_memory_id="a", target_memory_id="b")
+    c.register_observation(reward=0.5)
+    assert c.successes == 0
+    assert c.failures == 0
+
+
+def test_synapse_candidate_to_dict_includes_bayesian_fields() -> None:
+    c = MemorySynapseCandidate(source_memory_id="a", target_memory_id="b", successes=3, failures=1)
+    d = c.to_dict()
+    assert d["successes"] == 3
+    assert d["failures"] == 1
+
+
+def test_synapse_candidate_from_dict_restores_bayesian_fields() -> None:
+    c = MemorySynapseCandidate.from_dict(
+        {
+            "source_memory_id": "a",
+            "target_memory_id": "b",
+            "successes": 5,
+            "failures": 2,
+        }
+    )
+    assert c.successes == 5
+    assert c.failures == 2
+    assert abs(c.success_rate - (6 / 9)) < 1e-9
+
+
+# ── GAP 9: Bridge prospective ────────────────────────────────────────
+
+
+def test_prospective_record_creates_node_with_prospective_domain() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "memory"
+        store = MemoryStore(base, association_window=2)
+        store.append(
+            MemoryRecord(
+                id="prospect_1",
+                kind="prospective",
+                payload={"summary": "investigar machine learning", "query": "ml basics"},
+            )
+        )
+        graph = store.load_graph()
+        node = graph.get_node("prospect_1")
+        assert node is not None
+        assert node.domain == "prospective"
+        assert node.payload.get("memory_type") == "prospective"

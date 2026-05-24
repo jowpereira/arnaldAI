@@ -43,6 +43,8 @@ from .refs import GraphCycleError, GraphRef, GraphRefKind, GraphRegistry
 from .store import CognitiveGraph
 from .temporal import BiTemporal, ValidityWindow, utc_now
 from .workflows import WorkflowStepSpec, compose_workflows, make_workflow
+from .synapse_candidates import ExecutionSynapseCandidate, ExecutionSynapseTracker
+from .agent_subgraphs import ensure_agent_subgraph, route_memory_to_agent, query_agent_context
 
 __all__ = [
     # Store principal
@@ -86,4 +88,11 @@ __all__ = [
     "utc_now",
     # Eventos
     "GraphEvent",
+    # Synapse candidates
+    "ExecutionSynapseCandidate",
+    "ExecutionSynapseTracker",
+    # Agent subgraphs
+    "ensure_agent_subgraph",
+    "route_memory_to_agent",
+    "query_agent_context",
 ]

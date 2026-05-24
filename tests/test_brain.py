@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from arnaldo.graph import CognitiveGraph, EdgeKind
 from arnaldo.graph.brain import BrainDecision, activate
+from arnaldo.graph.brain_helpers import derive_complexity, detect_knowledge_gap
 from arnaldo.graph.edges import GraphEdge
+from arnaldo.graph.matching import MatchResult
 from arnaldo.graph.node_types import CapabilityNode, MemoryNode, SynapseNode
 from arnaldo.graph.provenance import SourceRecord
+from arnaldo.graph.nodes import NodeStatus
 from arnaldo.kernel.bootstrap import bootstrap_graph
+from arnaldo.episteme.signals import GapType
 
 
 _BOOT = SourceRecord.from_bootstrap("test")
@@ -308,3 +312,134 @@ class TestSpecializationDepth:
             tier_preference="fast",
         )
         assert syn.payload.get("specialization_depth", 0) == 0
+
+
+class TestDeriveComplexityLocalCapabilities:
+    """derive_complexity com capabilities locais usa skip_full_pipeline=False."""
+
+    def _make_synapse(self, syn_id: str = "syn-test") -> SynapseNode:
+        return SynapseNode.specialist(
+            label="test",
+            id=syn_id,
+            role="searcher",
+            objective="buscar",
+            tier_preference="expert",
+        )
+
+    def test_local_cap_needs_skip_false(self) -> None:
+        graph = CognitiveGraph()
+        syn = self._make_synapse()
+        graph.add_node(syn)
+        primary = MatchResult(node=syn, score=0.5)
+        cap_needs = ["filesystem.local.search"]
+        complexity, skip, tier = derive_complexity(
+            graph, primary, [primary], cap_needs, "ache a pasta do mt5"
+        )
+        assert complexity == "intermediate"
+        assert skip is False
+
+    def test_shell_cap_needs_skip_false(self) -> None:
+        graph = CognitiveGraph()
+        syn = self._make_synapse()
+        graph.add_node(syn)
+        primary = MatchResult(node=syn, score=0.5)
+        cap_needs = ["shell.local.readonly"]
+        complexity, skip, tier = derive_complexity(
+            graph, primary, [primary], cap_needs, "rode o comando"
+        )
+        assert skip is False
+
+    def test_remote_cap_needs_skip_true(self) -> None:
+        graph = CognitiveGraph()
+        syn = self._make_synapse()
+        graph.add_node(syn)
+        primary = MatchResult(node=syn, score=0.5)
+        cap_needs = ["search.public_web"]
+        complexity, skip, tier = derive_complexity(
+            graph, primary, [primary], cap_needs, "buscar na web"
+        )
+        assert skip is True
+
+    def test_mixed_caps_skip_false_when_local_present(self) -> None:
+        graph = CognitiveGraph()
+        syn = self._make_synapse()
+        graph.add_node(syn)
+        primary = MatchResult(node=syn, score=0.5)
+        cap_needs = ["search.public_web", "filesystem.local.search"]
+        complexity, skip, tier = derive_complexity(
+            graph, primary, [primary], cap_needs, "buscar local e web"
+        )
+        assert skip is False
+
+
+# ── GAP 3: needs_external_data cancela skip ──────────────────────────
+
+
+class TestDecisionToComplexityExternalData:
+    """_decision_to_complexity com needs_external_data=True cancela skip."""
+
+    def test_skip_cancelled_when_needs_external_data(self) -> None:
+        from arnaldo.kernel.helpers import decision_to_complexity
+
+        decision = BrainDecision(
+            primary_synapse="syn-test",
+            tier="fast",
+            complexity="intermediate",
+            skip_full_pipeline=True,
+            needs_external_data=True,
+        )
+        complexity = decision_to_complexity(decision)
+        assert complexity.skip_full_pipeline is False
+
+    def test_skip_preserved_when_no_external_data(self) -> None:
+        from arnaldo.kernel.helpers import decision_to_complexity
+
+        decision = BrainDecision(
+            primary_synapse="syn-test",
+            tier="fast",
+            complexity="intermediate",
+            skip_full_pipeline=True,
+            needs_external_data=False,
+        )
+        complexity = decision_to_complexity(decision)
+        assert complexity.skip_full_pipeline is True
+
+
+# ── GAP 2: GapType detection ─────────────────────────────────────────
+
+
+class TestGapTypeDetection:
+    """detect_knowledge_gap retorna GapType correto por cenário."""
+
+    def test_high_confidence_returns_none(self) -> None:
+        mem = MemoryNode.semantic(label="fact::test", id="m1", payload={}, source=_BOOT)
+        result = detect_knowledge_gap(0.5, [MatchResult(node=mem, score=0.5)])
+        assert result == GapType.NONE
+
+    def test_no_memories_returns_genuine(self) -> None:
+        result = detect_knowledge_gap(0.1, [])
+        assert result == GapType.GENUINE
+
+    def test_low_score_memories_no_graph_returns_genuine(self) -> None:
+        mem = MemoryNode.semantic(label="fact::weak", id="m2", payload={}, source=_BOOT)
+        result = detect_knowledge_gap(0.1, [MatchResult(node=mem, score=0.1)])
+        assert result == GapType.GENUINE
+
+    def test_low_score_stale_memory_returns_decayed(self) -> None:
+        graph = CognitiveGraph()
+        mem = MemoryNode.semantic(label="fact::old", id="m3", payload={}, source=_BOOT)
+        mem = mem.with_status(NodeStatus.STALE)
+        graph.add_node(mem)
+        result = detect_knowledge_gap(0.1, [MatchResult(node=mem, score=0.1)], graph)
+        assert result == GapType.DECAYED
+
+    def test_moderate_score_below_threshold_returns_retrieval_miss(self) -> None:
+        mem = MemoryNode.semantic(label="fact::partial", id="m4", payload={}, source=_BOOT)
+        result = detect_knowledge_gap(0.1, [MatchResult(node=mem, score=0.25)])
+        assert result == GapType.RETRIEVAL_MISS
+
+    def test_brain_decision_has_gap_type_field(self) -> None:
+        graph = CognitiveGraph()
+        decision = activate(graph, "algo totalmente desconhecido xyz123")
+        assert hasattr(decision, "gap_type")
+        assert isinstance(decision.gap_type, GapType)

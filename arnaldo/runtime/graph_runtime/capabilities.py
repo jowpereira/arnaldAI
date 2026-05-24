@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from arnaldo.constants.discovery_terms import TOOLING_PREFIXES as _TOOLING_PREFIXES
 from arnaldo.graph import CapabilityNode, CognitiveGraph
 
 from .infra import _slug
@@ -29,16 +30,17 @@ def _infer_capability_id_from_output(
     return tooling_id_by_slug.get(slug, "")
 
 
+
 def _collect_tooling_targets(capability_resolution: Dict[str, Any]) -> Dict[str, list[str]]:
     missing: set[str] = set()
     degraded: set[str] = set()
     for item in capability_resolution.get("missing", []) or []:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.", "search.")):
+        if capability_id.startswith(_TOOLING_PREFIXES):
             missing.add(capability_id)
     for item in capability_resolution.get("degraded", []) or []:
         capability_id = str(item.get("id", "")).strip()
-        if capability_id.startswith(("connector.", "tool.", "search.")):
+        if capability_id.startswith(_TOOLING_PREFIXES):
             degraded.add(capability_id)
     return {
         "missing": sorted(missing),
@@ -49,16 +51,19 @@ def _collect_tooling_targets(capability_resolution: Dict[str, Any]) -> Dict[str,
 def _collect_tool_execution_targets(
     capability_resolution: Dict[str, Any],
 ) -> list[Dict[str, str]]:
+    from arnaldo.capabilities.registry import _BUILTIN_CAPABILITIES
+
     targets: dict[str, str] = {}
     for bucket in ("available", "degraded", "missing"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
-            if not capability_id.startswith(("connector.", "tool.", "search.")):
+            if not capability_id.startswith(_TOOLING_PREFIXES):
                 continue
             module_path = _capability_module_path(item)
-            if not module_path:
+            # Builtins não precisam de module_path explícito
+            if not module_path and capability_id not in _BUILTIN_CAPABILITIES:
                 continue
-            targets[capability_id] = module_path
+            targets[capability_id] = module_path or _BUILTIN_CAPABILITIES.get(capability_id, "")
     return [
         {"id": capability_id, "module_path": targets[capability_id]}
         for capability_id in sorted(targets.keys())
@@ -194,7 +199,7 @@ def _resolve_capability_maturity(
     hinted = str(maturity_hint or "").strip().lower()
     if hinted in levels:
         return hinted
-    is_tooling = capability_id.startswith(("connector.", "tool."))
+    is_tooling = capability_id.startswith(_TOOLING_PREFIXES)
     if state == "available":
         return "tested" if is_tooling else "trusted"
     if state == "degraded":

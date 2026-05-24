@@ -26,8 +26,15 @@ class MemorySynapseCandidate:
     target_signature: str = ""
     support: int = 0
     greedy_score: float = 0.0
+    successes: int = 0
+    failures: int = 0
     materialized_synapse_id: str | None = None
     last_seen_at: datetime = field(default_factory=utc_now)
+
+    @property
+    def success_rate(self) -> float:
+        """Laplace-smoothed success rate: (s+1)/(s+f+2)."""
+        return (self.successes + 1) / (self.successes + self.failures + 2)
 
     @property
     def key(self) -> str:
@@ -44,6 +51,11 @@ class MemorySynapseCandidate:
         alpha = 1.0 / float(self.support)
         clipped = max(0.0, min(1.0, float(reward)))
         self.greedy_score = ((1.0 - alpha) * self.greedy_score) + (alpha * clipped)
+        # Classificação Bayesiana: reward > 0.5 = sucesso, < 0.5 = falha
+        if clipped > 0.5:
+            self.successes += 1
+        elif clipped < 0.5:
+            self.failures += 1
         self.last_seen_at = at or utc_now()
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,6 +66,8 @@ class MemorySynapseCandidate:
             "target_signature": self.target_signature,
             "support": self.support,
             "greedy_score": self.greedy_score,
+            "successes": self.successes,
+            "failures": self.failures,
             "materialized_synapse_id": self.materialized_synapse_id,
             "last_seen_at": self.last_seen_at.isoformat(),
         }
@@ -77,6 +91,8 @@ class MemorySynapseCandidate:
             target_signature=target_signature or target_memory_id,
             support=max(0, int(payload.get("support", 0))),
             greedy_score=max(0.0, min(1.0, float(payload.get("greedy_score", 0.0)))),
+            successes=max(0, int(payload.get("successes", 0))),
+            failures=max(0, int(payload.get("failures", 0))),
             materialized_synapse_id=materialized,
             last_seen_at=parse_dt(payload.get("last_seen_at")),
         )
@@ -111,7 +127,7 @@ def jaccard(a: Iterable[str], b: Iterable[str]) -> float:
 
 
 def memory_synapse_id(key: str) -> str:
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
     return f"synmem_{digest}"
 
 

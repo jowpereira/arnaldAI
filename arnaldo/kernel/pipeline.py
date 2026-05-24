@@ -44,7 +44,9 @@ def run_full_pipeline(
 
     retrieval = retrieve_for_request(kernel.memory.load_graph(), request)
 
-    task = kernel.task_compiler.compile(intent, retrieval=retrieval)
+    task = kernel.task_compiler.compile(
+        intent, retrieval=retrieval, extra_capability_needs=complexity.capability_needs
+    )
     _session.inject_task_runtime_context(
         task=task,
         request=request,
@@ -142,12 +144,18 @@ def run_full_pipeline(
         complexity=complexity,
     )
 
-    proactive_scheduled = kernel.proactivity.schedule_from_run(
-        session=session,
-        task=task,
-        adaptive_plan=adaptive_plan,
-        run_id=run_id,
-    )
+    # P0-A: Gap report condiciona síntese, proatividade e gravação de sessão
+    gap_detected = gap_report.status != "ok"
+
+    # Proatividade só agenda se não houve gap
+    proactive_scheduled = 0
+    if not gap_detected:
+        proactive_scheduled = kernel.proactivity.schedule_from_run(
+            session=session,
+            task=task,
+            adaptive_plan=adaptive_plan,
+            run_id=run_id,
+        )
     if proactive_scheduled > 0:
         _session.evidence(
             store,
@@ -157,7 +165,9 @@ def run_full_pipeline(
             "Mensagens proativas agendadas para continuidade de sessão.",
             {"count": proactive_scheduled, "session_id": session.id},
         )
+
     response = synthesize_response(runtime_result, request, kernel._llm_client)
+
     session = kernel.sessions.record_turn(
         session,
         user_message=request,
@@ -166,16 +176,25 @@ def run_full_pipeline(
             "run_id": run_id,
             "tool_forge_created": len(tool_forge_report["created"]),
             "missing_capabilities": len(capability_resolution["missing"]),
+            "gap_detected": gap_detected,
+            "gap_warnings": gap_report.warnings if gap_detected else [],
         },
     )
     files["session_state"] = store.write_json(
         "session-state.json", kernel.sessions.snapshot(session)
     )
     kernel.memory._persist_graph_state()
+
+    # Gap tag só no response ao caller — não polui system_summary da sessão
+    user_response = response
+    if gap_detected:
+        gap_warnings = ", ".join(gap_report.warnings)
+        user_response = f"[execução incompleta: {gap_warnings}]\n\n{response}"
+
     return RunResult(
         run_id=run_id,
         run_dir=store.run_dir,
         files=files,
         session_id=session.id,
-        response=response,
+        response=user_response,
     )

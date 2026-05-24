@@ -96,6 +96,29 @@ def to_memory_node(record: MemoryRecord) -> MemoryNode:
         )
 
     source = source_for_payload(payload)
+    if record.kind == "prospective":
+        node = MemoryNode.semantic(
+            label=label,
+            id=record_id,
+            payload=payload,
+            source=source,
+            domain="prospective",
+        )
+        # Sobrescreve memory_type após construção (semantic() força "semantic")
+        node.payload["memory_type"] = "prospective"
+        return node
+
+    if record.kind == "negative":
+        node = MemoryNode.semantic(
+            label=label,
+            id=record_id,
+            payload=payload,
+            source=source,
+            domain="negative",
+        )
+        node.payload["memory_type"] = "negative"
+        return node
+
     if record.kind == "procedural":
         pattern = str(payload.get("pattern") or payload.get("action") or label).strip()
         return MemoryNode.procedural(
@@ -199,7 +222,8 @@ def refresh_materialized_synapse(
         source_signature=candidate.source_signature or candidate.source_memory_id,
         target_signature=candidate.target_signature or candidate.target_memory_id,
     )
-    assert isinstance(updated, SynapseNode)
+    if not isinstance(updated, SynapseNode):
+        raise TypeError(f"Expected SynapseNode, got {type(updated).__name__}")
     graph.add_node(updated)
     ensure_edge(
         graph,

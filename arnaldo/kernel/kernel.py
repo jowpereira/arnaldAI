@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -28,50 +27,35 @@ from arnaldo.memory import MemoryStore
 from arnaldo.proactivity import ProactivityManager
 from arnaldo.reality import RealityGapDetector
 from arnaldo.runtime import (
-    GraphRuntime,
-    LocalRuntime,
-    MultiAgentRuntime,
     RuntimeAdapter,
     SandboxManager,
 )
 from arnaldo.session import SessionManager
 
-from . import organization as _org
-from arnaldo.graph.brain import BrainDecision, activate as brain_activate, BRAIN_CONFIDENCE_THRESHOLD
+from arnaldo.graph.brain import (
+    activate as brain_activate,
+    BRAIN_CONFIDENCE_THRESHOLD,
+)
 
-from .classify import RequestComplexity, classify_request
+from .classify import classify_request
 from .fast_path import fast_response, medium_response
 from .pipeline import run_full_pipeline
 from .bootstrap import bootstrap_graph
 from .metrics import MetricsCollector
 from .plasticity import maybe_sweep_decay
+from .episteme_hooks import create_prospective_memory, collect_pending_prospective
+from .episteme_bridge import maybe_forage, check_web_search_available
+from arnaldo.episteme.signals import GapType
+from .helpers import (
+    resolve_runtime as _resolve_runtime,
+    decision_to_complexity as _decision_to_complexity,
+    pop_due_proactive_messages as _pop_due_proactive,
+    pending_proactive_count as _pending_proactive_count,
+    build_runtime_organization as _build_runtime_org,
+)
+from .thinking import ThinkingEmitter
 
 logger = logging.getLogger("arnaldo.kernel")
-
-
-def _resolve_runtime(
-    mode_override: str | None,
-    llm_client: Any,
-) -> RuntimeAdapter:
-    mode = (mode_override or os.environ.get("ARNALDO_RUNTIME_MODE", "graph")).strip().lower()
-    if mode == "graph":
-        return GraphRuntime(llm_client=llm_client)
-    if mode == "multiagent":
-        return MultiAgentRuntime()
-    return LocalRuntime()
-
-
-def _decision_to_complexity(decision: BrainDecision) -> RequestComplexity:
-    """Converte BrainDecision para RequestComplexity (interface legada)."""
-    return RequestComplexity(
-        decision.complexity,
-        f"brain_activated:{decision.primary_synapse or 'none'}",
-        skip_full_pipeline=decision.skip_full_pipeline,
-        use_retrieval=decision.complexity != "conversational",
-        suggested_tier=decision.tier,
-        needs_external_data=decision.needs_external_data,
-        capability_needs=decision.capability_needs,
-    )
 
 
 class ArnaldoKernel:
@@ -115,10 +99,16 @@ class ArnaldoKernel:
         self._gap_detector_inst: RealityGapDetector | None = None
         self._sandboxes_inst: SandboxManager | None = None
         self.metrics = MetricsCollector()
+        self.thinking = ThinkingEmitter()
 
         # Bootstrap: semeia grafo se vazio e persiste
-        if bootstrap_graph(self.memory.load_graph()) > 0:
+        graph = self.memory.load_graph()
+        if bootstrap_graph(graph) > 0:
             self.memory._persist_graph_state()
+        # Guard: grafo unificado — garante que MemoryStore aponta para o mesmo objeto
+        if self.memory.load_graph() is not graph:
+            logger.warning("MemoryStore com grafo divergente — forçando bind_graph")
+            self.memory.bind_graph(graph)
 
     # ── Lazy properties — só instanciadas quando o full pipeline precisa ──
 
@@ -204,9 +194,15 @@ class ArnaldoKernel:
         terms_accepted: bool | None = None,
         *,
         llm_classify: bool = False,
+        thinking_callback: Any | None = None,
     ) -> RunResult:
         run_id = new_id("run")
         self.metrics = MetricsCollector()
+        self.thinking.reset()
+        if thinking_callback is not None:
+            self.thinking.register(thinking_callback)
+        from arnaldo.episteme.forager import WebForager
+        WebForager.reset_counter()
         llm_for_classify = self._llm_client if llm_classify else None
         graph = self.memory.load_graph()
 
@@ -215,6 +211,11 @@ class ArnaldoKernel:
         if result and any(v > 0 for v in result.values()):
             self.metrics.record_decay(sum(result.values()))
             self.memory._persist_graph_state()
+
+        # GAP 4: Coleta memórias prospectivas pendentes
+        pending = collect_pending_prospective(graph)
+        if pending:
+            logger.debug("Memórias prospectivas pendentes: %d", len(pending))
 
         with self.metrics.phase("classify"):
             decision = brain_activate(graph, request)
@@ -225,6 +226,57 @@ class ArnaldoKernel:
                 complexity = _decision_to_complexity(decision)
         self.metrics.set_complexity(complexity.level)
         logger.debug("classify: level=%s reason=%s", complexity.level, complexity.reason)
+
+        # GAP 1: Cria memória prospectiva quando brain detecta gap
+        prospect = create_prospective_memory(decision, request)
+        if prospect is not None:
+            self.memory.append(prospect)
+
+        # GAP 10: Foraging epistêmico — busca externa se gap + web disponível
+        if decision.knowledge_gap and not complexity.skip_full_pipeline:
+            has_web = check_web_search_available(graph)
+            if self.thinking.has_listeners:
+                self.thinking.searching(request, source="epistemic_gap")
+            foraged = maybe_forage(
+                graph,
+                decision.gap_type,
+                request,
+                decision.confidence,
+                has_web_search=has_web,
+                thinking=self.thinking,
+            )
+            if foraged:
+                decision = brain_activate(graph, request)
+                if decision.confidence >= BRAIN_CONFIDENCE_THRESHOLD:
+                    complexity = _decision_to_complexity(decision)
+                self.memory._persist_graph_state()
+
+        # GAP P3: Ambiguidade alta → foraging para resolver dúvida
+        if not decision.knowledge_gap and not complexity.skip_full_pipeline:
+            from arnaldo.components.intent_heuristics import infer_signals
+
+            signals = infer_signals(request)
+            if signals["ambiguity_score"] >= 2:
+                has_web = check_web_search_available(graph)
+                if has_web:
+                    if self.thinking.has_listeners:
+                        self.thinking.analyzing(
+                            f"Ambiguidade detectada (score={signals['ambiguity_score']})"
+                        )
+                        self.thinking.searching(request, source="ambiguity_resolution")
+                    foraged = maybe_forage(
+                        graph,
+                        GapType.GENUINE,
+                        request,
+                        decision.confidence,
+                        has_web_search=True,
+                        thinking=self.thinking,
+                    )
+                    if foraged:
+                        decision = brain_activate(graph, request)
+                        if decision.confidence >= BRAIN_CONFIDENCE_THRESHOLD:
+                            complexity = _decision_to_complexity(decision)
+                        self.memory._persist_graph_state()
 
         # === FAST PATH: conversacional → single LLM call ===
         if complexity.skip_full_pipeline and complexity.level == "conversational":
@@ -268,17 +320,10 @@ class ArnaldoKernel:
         )
 
     def pop_due_proactive_messages(self, session_id: str, *, limit: int = 3) -> list[str]:
-        due = self.proactivity.pop_due(session_id=session_id, limit=limit)
-        return [
-            str(item.get("message", "")).strip()
-            for item in due
-            if str(item.get("message", "")).strip()
-        ]
+        return _pop_due_proactive(self.proactivity, session_id, limit=limit)
 
     def pending_proactive_count(self, session_id: str) -> int:
-        return self.proactivity.pending_count(session_id=session_id)
-
-    # ── Métodos privados auxiliares ──────────────────────────────────────
+        return _pending_proactive_count(self.proactivity, session_id)
 
     def _build_runtime_organization(
         self,
@@ -286,6 +331,6 @@ class ArnaldoKernel:
         decision: CognitiveDecision,
         capability_resolution: Dict[str, Any],
     ) -> OrganizationIR:
-        if isinstance(self.runtime, GraphRuntime):
-            return _org.build_graph_native_organization(task, decision, capability_resolution)
-        return self.organizations.generate(task, decision, capability_resolution)
+        return _build_runtime_org(
+            self.runtime, self.organizations, task, decision, capability_resolution
+        )
