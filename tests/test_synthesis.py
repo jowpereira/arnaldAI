@@ -30,6 +30,23 @@ def test_extract_step_content_uses_result_sections() -> None:
     assert "Seção 1 texto" in content
 
 
+def test_extract_step_content_skips_status_section_and_uses_artifact_body() -> None:
+    step = {
+        "output": "primary_artifact",
+        "result": {
+            "sections": [
+                "status: proposed_draft_pending_info",
+                "primary_artifact_outline: Plano de Arquitetura do Runtime",
+            ],
+            "evidence": ["Nova estrutura proposta com control-plane e data-plane."],
+        },
+    }
+    content = _extract_step_content(step)
+    assert "Plano de Arquitetura do Runtime" in content
+    assert "Nova estrutura proposta" in content
+    assert "proposed_draft_pending_info" not in content
+
+
 def test_extract_step_content_uses_result_string() -> None:
     step = {"output": "primary_artifact", "result": "Texto direto do result"}
     assert _extract_step_content(step) == "Texto direto do result"
@@ -75,6 +92,26 @@ def test_build_synthesis_messages_marks_failed_steps() -> None:
     messages = build_synthesis_messages(step_results=steps, original_request="teste")
     content = messages[-1]["content"]
     assert "FALHOU" in content
+
+
+def test_build_synthesis_messages_prioritizes_primary_artifact_over_reviews() -> None:
+    steps = [
+        {
+            "output": "primary_artifact",
+            "result": {"sections": ["Plano principal consolidado"]},
+            "success": True,
+        },
+        {
+            "output": "critic_review",
+            "result": {"status": "revisions_required", "warnings": ["Há pontos a validar."]},
+            "success": True,
+        },
+    ]
+    messages = build_synthesis_messages(step_results=steps, original_request="crie um plano")
+    content = messages[-1]["content"]
+    assert "artefato principal" in content
+    assert "[Resposta principal 1 (OK)]" in content
+    assert "[Revisao 2 (OK)]" in content
 
 
 def test_build_synthesis_messages_truncates_at_500() -> None:

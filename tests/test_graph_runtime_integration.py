@@ -8,6 +8,7 @@ from typing import Any
 from types import SimpleNamespace
 from dataclasses import fields
 from typing import get_origin
+from unittest.mock import patch
 
 from arnaldo.components import CapabilityRegistry, ToolForge
 from arnaldo.graph import CapabilityNode, CognitiveGraph, EdgeKind, GraphEdge, NodeKind, SynapseNode
@@ -18,6 +19,8 @@ from arnaldo.llm.structured import TypedResponse
 from arnaldo.memory import MemoryStore
 from arnaldo.proactivity import ProactivityManager
 from arnaldo.runtime import GraphRuntime, SandboxManager
+from arnaldo.runtime.base import RuntimeContext
+from arnaldo.runtime.graph_runtime.models import GenericStepOutput
 from arnaldo.session import SessionManager
 from arnaldo.storage import RunStore
 
@@ -281,6 +284,42 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["max_retries"], 0)
         self.assertEqual(workflow[0]["retry_attempts"], 1)
 
+    def test_graph_runtime_keeps_tooling_steps_for_available_shell_capability(self) -> None:
+        runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+        organization = SimpleNamespace(
+            topology="pipeline_with_critic",
+            workflow=[],
+            agents=[],
+        )
+        task = SimpleNamespace(
+            goal={
+                "statement": "listar conteúdo local do workspace",
+                "type": "open_ended_execution",
+            },
+            context={
+                "source": "cli",
+                "raw_request": "dentro do desckto tem uma asta worksace, consegue fazerum ls",
+                "original_request": "dentro do desckto tem uma asta worksace, consegue fazerum ls",
+            },
+            capability_needs=[{"id": "shell.local.readonly"}],
+            uncertainty=[],
+            risk={"execution_risk": "low"},
+        )
+
+        workflow = runtime._materialize_runtime_workflow(  # pylint: disable=protected-access
+            organization=organization,
+            task=task,
+            capability_resolution={
+                "available": [{"id": "shell.local.readonly"}],
+                "missing": [],
+                "degraded": [],
+            },
+        )
+
+        actions = [str(item.get("action", "")) for item in workflow]
+        self.assertIn("execute_tooling", actions)
+        self.assertGreater(len(workflow), 1)
+
     def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(
         self,
     ) -> None:
@@ -453,6 +492,101 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 else "activates_reachable"
             )
             self.assertEqual(planned_mode, expected_mode)
+
+    def test_graph_runtime_executes_materialized_path_in_declared_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
+            graph = CognitiveGraph()
+
+            root = SynapseNode.specialist(
+                label="Root",
+                id="syn_runtime_order_root",
+                role="operator",
+                objective="primeiro passo",
+                output_contract={"schema": "generic_step_output"},
+                output_contract_model=GenericStepOutput,
+                tier_preference="fast",
+            )
+            middle = SynapseNode.specialist(
+                label="Middle",
+                id="syn_runtime_order_middle",
+                role="operator",
+                objective="segundo passo",
+                output_contract={"schema": "generic_step_output"},
+                output_contract_model=GenericStepOutput,
+                tier_preference="fast",
+            )
+            last = SynapseNode.specialist(
+                label="Last",
+                id="syn_runtime_order_last",
+                role="critic",
+                objective="terceiro passo",
+                output_contract={"schema": "generic_step_output"},
+                output_contract_model=GenericStepOutput,
+                tier_preference="fast",
+            )
+            graph.add_node(root)
+            graph.add_node(middle)
+            graph.add_node(last)
+            graph.add_edge(GraphEdge.connect(root.id, last.id, EdgeKind.ACTIVATES, weight=0.99))
+            graph.add_edge(GraphEdge.connect(root.id, middle.id, EdgeKind.ACTIVATES, weight=0.50))
+            graph.add_edge(GraphEdge.connect(middle.id, last.id, EdgeKind.ACTIVATES, weight=0.40))
+
+            step_by_node = {
+                root.id: {
+                    "id": "step_root",
+                    "agent_id": "framer",
+                    "action": "frame_intent",
+                    "output": "intent_frame",
+                },
+                middle.id: {
+                    "id": "step_middle",
+                    "agent_id": "planner",
+                    "action": "decompose_work",
+                    "output": "work_plan",
+                },
+                last.id: {
+                    "id": "step_last",
+                    "agent_id": "critic",
+                    "action": "critic_review",
+                    "output": "critic_review",
+                },
+            }
+            path = [root.id, middle.id, last.id]
+            context = RuntimeContext(
+                run_id="run_runtime_order",
+                task=SimpleNamespace(
+                    id="task_runtime_order",
+                    goal={"statement": "validar ordem materializada", "type": "analyze_or_evaluate"},
+                    constraints=[],
+                    uncertainty=[],
+                    deliverables=[{"id": "primary_artifact"}],
+                    success_criteria=[],
+                    capability_needs=[],
+                ),
+                organization=SimpleNamespace(
+                    id="org_runtime_order",
+                    topology="pipeline_with_critic",
+                    workflow=[],
+                    agents=[],
+                ),
+                policy=SimpleNamespace(allowed=True, approval_required=False, constraints=[]),
+                sandbox={},
+                capability_resolution={"available": [], "missing": [], "degraded": []},
+            )
+            store = RunStore(base / "runs", "run_runtime_order").create()
+
+            with patch(
+                "arnaldo.runtime.graph_runtime.engine._build_execution_graph",
+                return_value=(graph, step_by_node, path),
+            ):
+                result = runtime.run(context, store)
+
+            self.assertEqual(
+                [item["action"] for item in result.step_results],
+                ["frame_intent", "decompose_work", "critic_review"],
+            )
 
     def test_graph_runtime_records_retention_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -689,6 +823,26 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertIn("MissingCapabilities:", request)
         self.assertNotIn("PolicyAllowed", request)
         self.assertNotIn("ApprovalRequired", request)
+
+    def test_build_request_includes_primary_user_request_for_tooling_turns(self) -> None:
+        task = SimpleNamespace(
+            goal={"statement": "listar conteúdo local", "type": "open_ended_execution"},
+            context={
+                "source": "cli",
+                "raw_request": "dentro do desckto tem uma asta worksace, consegue fazerum ls",
+                "original_request": "dentro do desckto tem uma asta worksace, consegue fazerum ls",
+            },
+            deliverables=[{"id": "primary_artifact"}],
+            capability_needs=[{"id": "shell.local.readonly"}],
+            uncertainty=[],
+        )
+        request = GraphRuntime._build_request(
+            task,
+            {"available": [{"id": "shell.local.readonly"}], "missing": [], "degraded": []},
+        )
+
+        self.assertIn("UserRequest: dentro do desckto tem uma asta worksace, consegue fazerum ls", request)
+        self.assertIn("CapabilityNeeds:", request)
 
     def test_build_request_for_lightweight_conversation_uses_direct_chat_contract(self) -> None:
         task = SimpleNamespace(

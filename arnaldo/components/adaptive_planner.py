@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 import re
 
+from arnaldo.capabilities.semantics import build_capability_need
 from arnaldo.constants.discovery_terms import (
     ALL_LOCAL_DISCOVERY_TERMS,
+    READONLY_SHELL_COMMAND_HINTS,
     SHELL_CONTEXT_NOUNS,
     SHELL_EXECUTION_VERBS,
 )
@@ -63,15 +65,26 @@ class AdaptivePlanner:
         merged = {item["id"]: dict(item) for item in current_needs}
         for hint in hints:
             capability_id = hint["id"]
-            payload = {
-                "id": capability_id,
-                "required": bool(hint.get("required", True)),
-                "reason": hint.get("reason", "adaptive_hint"),
-            }
+            payload = build_capability_need(
+                capability_id,
+                required=bool(hint.get("required", True)),
+                reason=str(hint.get("reason", "adaptive_hint")),
+            )
             if capability_id in merged:
                 merged[capability_id]["required"] = (
                     merged[capability_id].get("required", False) or payload["required"]
                 )
+                for field in (
+                    "family",
+                    "locality",
+                    "access_mode",
+                    "effect",
+                    "freshness",
+                    "abstract",
+                    "inline_lookup_executor_id",
+                ):
+                    if field in payload:
+                        merged[capability_id][field] = payload[field]
                 if payload.get("reason"):
                     merged[capability_id]["reason"] = payload["reason"]
             else:
@@ -201,6 +214,17 @@ def infer_capability_hints(text: str) -> List[Dict[str, Any]]:
                 "id": "shell.local.readonly",
                 "required": False,
                 "reason": "pedido_indica_execucao_local",
+            }
+        )
+    if any(
+        re.search(rf"(?<![a-z0-9_-]){re.escape(term)}(?![a-z0-9_-])", lowered)
+        for term in READONLY_SHELL_COMMAND_HINTS
+    ):
+        hints.append(
+            {
+                "id": "shell.local.readonly",
+                "required": True,
+                "reason": "pedido_indica_comando_read_only_explicito",
             }
         )
     return dedupe_hints(hints)

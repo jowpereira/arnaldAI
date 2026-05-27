@@ -65,7 +65,8 @@ def post_process_run(
         _render.render_result(run_id, files, organization.topology),
     )
 
-    gap_report = gap_detector.analyze(task, list(runtime_result.step_results))
+    gap_inputs = _augment_step_results_for_gap_detection(list(runtime_result.step_results))
+    gap_report = gap_detector.analyze(task, gap_inputs)
     if gap_report.status != "ok":
         _session.evidence(
             store,
@@ -253,3 +254,69 @@ def create_negative_memory(
             "inhibits_synapses": [],
         },
     )
+
+
+def _augment_step_results_for_gap_detection(step_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    augmented = list(step_results)
+    produced = {
+        str(item.get("output", "")).strip()
+        for item in step_results
+        if str(item.get("output", "")).strip()
+    }
+    successful_steps = [item for item in step_results if item.get("success", True)]
+
+    if "execution_evidence" not in produced and successful_steps:
+        actions = [
+            str(item.get("action", "")).strip()
+            for item in successful_steps
+            if str(item.get("action", "")).strip()
+        ]
+        action_preview = ", ".join(actions[:4]) or "etapas registradas"
+        augmented.append(
+            {
+                "output": "execution_evidence",
+                "success": True,
+                "result": {
+                    "summary": f"{len(successful_steps)} etapas registradas no ledger: {action_preview}"
+                },
+            }
+        )
+
+    if "next_actions" not in produced:
+        next_actions = _derive_gap_next_actions(step_results)
+        if next_actions:
+            augmented.append(
+                {
+                    "output": "next_actions",
+                    "success": True,
+                    "result": {"summary": next_actions},
+                }
+            )
+
+    return augmented
+
+
+def _derive_gap_next_actions(step_results: list[dict[str, Any]]) -> str:
+    for item in reversed(step_results):
+        result = item.get("result")
+        if isinstance(result, dict):
+            uncertainties = result.get("uncertainties")
+            if isinstance(uncertainties, list):
+                cleaned = [str(entry).strip() for entry in uncertainties if str(entry).strip()]
+                if cleaned:
+                    return "Resolver incertezas abertas: " + " | ".join(cleaned[:3])
+            steps = result.get("steps")
+            if isinstance(steps, list):
+                cleaned = [str(entry).strip() for entry in steps if str(entry).strip()]
+                if cleaned:
+                    return "Próximo passo sugerido: %s" % cleaned[0]
+            warnings = result.get("warnings")
+            if isinstance(warnings, list):
+                cleaned = [str(entry).strip() for entry in warnings if str(entry).strip()]
+                if cleaned:
+                    return "Revise os alertas levantados e ajuste o próximo passo."
+        if item.get("success", True) and str(item.get("output", "")).strip() == "primary_artifact":
+            return "Revise o artefato principal e siga com a próxima ação operacional mais direta."
+    if step_results:
+        return "Revise os resultados registrados e execute o próximo passo mais direto."
+    return ""

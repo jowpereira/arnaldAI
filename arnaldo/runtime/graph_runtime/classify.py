@@ -9,6 +9,7 @@ from arnaldo.constants.discovery_terms import (
     AMBIGUOUS_VERBS,
     FILESYSTEM_DISCOVERY_VERBS,
     LOCAL_CONTEXT_NOUNS,
+    READONLY_SHELL_COMMAND_HINTS,
     SHELL_CONTEXT_NOUNS,
     SHELL_EXECUTION_VERBS,
     TECHNICAL_CONTEXT,
@@ -97,15 +98,11 @@ def _is_latency_sensitive_cli_turn(
     request = _extract_primary_user_request(task)
     if not request:
         return False
+    if _has_tooling_capability_request(task, capability_resolution):
+        return False
     word_count = _word_count(request)
     if word_count > 6:
         return False
-
-    for bucket in ("missing", "degraded"):
-        for item in capability_resolution.get(bucket, []) or []:
-            capability_id = str(item.get("id", "")).strip()
-            if capability_id.startswith(TOOLING_PREFIXES):
-                return False
     return True
 
 
@@ -139,14 +136,10 @@ def _is_conversational_cli_turn(
     request = _extract_primary_user_request(task)
     if not request:
         return False
+    if _has_tooling_capability_request(task, capability_resolution):
+        return False
     if _contains_structured_execution_intent(request):
         return False
-    if capability_resolution:
-        for bucket in ("missing", "degraded"):
-            for item in capability_resolution.get(bucket, []) or []:
-                capability_id = str(item.get("id", "")).strip()
-                if capability_id.startswith(TOOLING_PREFIXES):
-                    return False
     if _word_count(request) > 36 and not _is_lightweight_conversational_task(task):
         return False
     return True
@@ -154,6 +147,25 @@ def _is_conversational_cli_turn(
 
 def _word_count(text: str) -> int:
     return len([chunk for chunk in str(text).split() if chunk.strip()])
+
+
+def _has_tooling_capability_request(
+    task: Any,
+    capability_resolution: Dict[str, Any] | None = None,
+) -> bool:
+    for item in getattr(task, "capability_needs", []) or []:
+        capability_id = (
+            str(item.get("id", "")).strip() if isinstance(item, dict) else str(item).strip()
+        )
+        if capability_id.startswith(TOOLING_PREFIXES):
+            return True
+    if capability_resolution:
+        for bucket in ("available", "missing", "degraded"):
+            for item in capability_resolution.get(bucket, []) or []:
+                capability_id = str(item.get("id", "")).strip()
+                if capability_id.startswith(TOOLING_PREFIXES):
+                    return True
+    return False
 
 
 def _contains_structured_execution_intent(text: str) -> bool:
@@ -192,6 +204,11 @@ def _contains_structured_execution_intent(text: str) -> bool:
     # Verbos de execução shell — match direto
     for verb in SHELL_EXECUTION_VERBS:
         if re.search(rf"\b{re.escape(verb)}\b", candidate):
+            return True
+
+    # Comandos read-only explícitos em texto livre ("faz um ls", "roda where python")
+    for command in READONLY_SHELL_COMMAND_HINTS:
+        if re.search(rf"(?<![a-z0-9_-]){re.escape(command)}(?![a-z0-9_-])", candidate):
             return True
 
     # Substantivos de contexto local/shell — match direto

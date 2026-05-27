@@ -51,6 +51,11 @@ def build_synthesis_messages(
     memory_context: str = "",
 ) -> List[Dict[str, str]]:
     """Constrói messages para sintetizar resposta textual a partir de step_results."""
+    has_primary_artifact = any(
+        str(step.get("output", "")).strip() == "primary_artifact"
+        and bool(step.get("success", True))
+        for step in step_results
+    )
     synthesis_prompt = (
         """\
 Sintetize uma resposta textual coerente a partir dos resultados abaixo.
@@ -61,13 +66,26 @@ Pedido original: %s
 """
         % original_request
     )
+    if has_primary_artifact:
+        synthesis_prompt += (
+            "\nSe houver um artefato principal, trate-o como a resposta principal ao usuario. "
+            "Use revisoes criticas apenas como ressalvas, riscos ou proximos passos, "
+            "sem substituir o artefato principal por um diagnostico."
+        )
 
     # Compila resultados dos steps
     step_lines: list[str] = []
     for idx, step in enumerate(step_results, 1):
         output = _extract_step_content(step)
         status = "OK" if step.get("success", True) else "FALHOU"
-        step_lines.append(f"[Step {idx} ({status})]: {str(output)[:500]}")
+        deliverable = str(step.get("output", "")).strip()
+        if deliverable == "primary_artifact":
+            label = "Resposta principal"
+        elif deliverable in {"critic_review", "risk_review", "decision_synthesis"}:
+            label = "Revisao"
+        else:
+            label = "Contexto"
+        step_lines.append(f"[{label} {idx} ({status})]: {str(output)[:500]}")
 
     content = synthesis_prompt + "\n\n" + "\n".join(step_lines)
 
@@ -87,11 +105,23 @@ def _extract_step_content(step: Dict[str, Any]) -> str:
                 return val.strip()
         sections = result.get("sections")
         if isinstance(sections, list) and sections:
-            first = sections[0]
-            if isinstance(first, dict):
-                return str(first.get("content", first.get("summary", str(first))))
-            if isinstance(first, str) and first.strip():
-                return first
+            meaningful_sections = [
+                text for text in (_section_text(section) for section in sections) if text
+            ]
+            if meaningful_sections:
+                evidence_excerpt = _list_excerpt(result.get("evidence"))
+                if evidence_excerpt:
+                    return f"{meaningful_sections[0]} {evidence_excerpt}".strip()
+                return meaningful_sections[0]
+        warnings_excerpt = _list_excerpt(result.get("warnings"))
+        if warnings_excerpt:
+            return warnings_excerpt
+        evidence_excerpt = _list_excerpt(result.get("evidence"))
+        if evidence_excerpt:
+            return evidence_excerpt
+        status = str(result.get("status", "")).strip()
+        if status:
+            return status
         return str(result)
     if isinstance(result, str) and result.strip():
         return result.strip()
@@ -106,6 +136,38 @@ def _extract_step_content(step: Dict[str, Any]) -> str:
     if output_str in _KNOWN_DELIVERABLE_IDS:
         return ""
     return output_str
+
+
+def _section_text(section: Any) -> str:
+    if isinstance(section, dict):
+        raw = str(section.get("content", section.get("summary", ""))).strip()
+    else:
+        raw = str(section).strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    low_signal_prefixes = (
+        "status:",
+        "evidence:",
+        "execution_evidence:",
+        "uncertainties:",
+        "incertezas:",
+        "warnings:",
+        "avisos:",
+        "next_actions:",
+    )
+    if lowered.startswith(low_signal_prefixes):
+        return ""
+    return raw
+
+
+def _list_excerpt(value: Any, *, limit: int = 2) -> str:
+    if not isinstance(value, list):
+        return ""
+    cleaned = [str(item).strip() for item in value if str(item).strip()]
+    if not cleaned:
+        return ""
+    return " ".join(cleaned[:limit]).strip()
 
 
 # IDs de deliverable que NUNCA devem vazar para resposta ao usuário

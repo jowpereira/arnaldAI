@@ -13,6 +13,7 @@ from arnaldo.runtime import GraphRuntime, LocalRuntime, MultiAgentRuntime, Runti
 
 from . import organization as _org
 from .classify import RequestComplexity
+from .execution_profile import select_execution_profile
 
 
 def resolve_runtime(
@@ -30,16 +31,21 @@ def resolve_runtime(
 
 def decision_to_complexity(decision: BrainDecision) -> RequestComplexity:
     """Converte BrainDecision para RequestComplexity (interface legada)."""
-    # GAP 3: needs_external_data cancela skip — dados externos exigem pipeline
-    skip = decision.skip_full_pipeline and not decision.needs_external_data
+    profile = select_execution_profile(
+        level=decision.complexity,
+        needs_external_data=decision.needs_external_data,
+        capability_ids=decision.capability_needs,
+    )
     return RequestComplexity(
         decision.complexity,
         f"brain_activated:{decision.primary_synapse or 'none'}",
-        skip_full_pipeline=skip,
-        use_retrieval=decision.complexity != "conversational",
+        skip_full_pipeline=profile.skip_full_pipeline,
+        use_retrieval=decision.complexity != "conversational" or profile.name == "inline_capability",
         suggested_tier=decision.tier,
         needs_external_data=decision.needs_external_data,
         capability_needs=decision.capability_needs,
+        execution_profile=profile.name,
+        execution_capability_ids=list(profile.inline_capability_ids),
     )
 
 

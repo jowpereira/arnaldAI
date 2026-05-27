@@ -612,6 +612,33 @@ class DynamicFeatureTest(unittest.TestCase):
         self.assertIn("draft_artifact", actions)
         self.assertIn("critic_review", actions)
 
+    def test_graph_runtime_uses_expert_tier_for_critic_steps(self) -> None:
+        intent = IntentCompiler(llm_client=False, strict_real=False).compile(
+            "quero um plano simples com revisão crítica",
+            autonomy="autonomo",
+        )
+        task = TaskCompiler().compile(intent)
+        runtime = GraphRuntime()
+        empty_org = SimpleNamespace(
+            agents=[],
+            workflow=[],
+            topology="minimal_pipeline",
+            required_capabilities=[],
+        )
+        graph, step_by_node, path = runtime._build_execution_graph(  # pylint: disable=protected-access
+            empty_org,
+            task=task,
+            capability_resolution={"available": [], "missing": [], "degraded": []},
+        )
+
+        critic_node_id = next(
+            node_id for node_id in path if step_by_node[node_id]["action"] == "critic_review"
+        )
+        critic_node = graph.get_node(critic_node_id)
+
+        self.assertIsNotNone(critic_node)
+        self.assertEqual(critic_node.payload.get("tier_preference"), "expert")
+
     def test_tool_forge_executes_without_terms_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

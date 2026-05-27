@@ -372,13 +372,28 @@ class TestDeriveComplexityLocalCapabilities:
         assert skip is False
 
 
-# ── GAP 3: needs_external_data cancela skip ──────────────────────────
+# ── Perfil de execução: external read-only inline, gap sem capability full ──
 
 
 class TestDecisionToComplexityExternalData:
-    """_decision_to_complexity com needs_external_data=True cancela skip."""
+    """_decision_to_complexity roteia por perfil, não por flag isolada."""
 
-    def test_skip_cancelled_when_needs_external_data(self) -> None:
+    def test_read_only_external_lookup_keeps_skip_and_inline_profile(self) -> None:
+        from arnaldo.kernel.helpers import decision_to_complexity
+
+        decision = BrainDecision(
+            primary_synapse="syn-test",
+            tier="fast",
+            complexity="intermediate",
+            skip_full_pipeline=True,
+            needs_external_data=True,
+            capability_needs=["search.public_web"],
+        )
+        complexity = decision_to_complexity(decision)
+        assert complexity.skip_full_pipeline is True
+        assert complexity.execution_profile == "inline_capability"
+
+    def test_gap_without_lookup_capability_uses_full_pipeline(self) -> None:
         from arnaldo.kernel.helpers import decision_to_complexity
 
         decision = BrainDecision(
@@ -390,6 +405,7 @@ class TestDecisionToComplexityExternalData:
         )
         complexity = decision_to_complexity(decision)
         assert complexity.skip_full_pipeline is False
+        assert complexity.execution_profile == "full_pipeline"
 
     def test_skip_preserved_when_no_external_data(self) -> None:
         from arnaldo.kernel.helpers import decision_to_complexity
@@ -403,6 +419,7 @@ class TestDecisionToComplexityExternalData:
         )
         complexity = decision_to_complexity(decision)
         assert complexity.skip_full_pipeline is True
+        assert complexity.execution_profile == "medium_response"
 
 
 # ── GAP 2: GapType detection ─────────────────────────────────────────

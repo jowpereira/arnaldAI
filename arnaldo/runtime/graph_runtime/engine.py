@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from arnaldo.graph import ExecutionEngine, SynapseExecutionResult
+from arnaldo.graph.execution import plasticity as _plasticity
 from arnaldo.llm import ContractModelRegistry
 from arnaldo.storage import RunStore
 
@@ -248,13 +249,12 @@ class GraphRuntime(RuntimeAdapter):
                     allowed_node_ids=allowed_node_ids,
                 )
             else:
-                _, step_context, execution_results = engine.execute_activates_reachable(
-                    path[0],
+                step_context, execution_results = engine.execute_path(
+                    path,
                     request=request,
                     context=step_context,
-                    max_steps=max(16, len(path) * 3),
-                    allowed_node_ids=allowed_node_ids,
                 )
+                _plasticity._record_path_transition_outcomes(engine, path, execution_results)
 
         step_results = _process_execution_results(
             execution_results=execution_results,

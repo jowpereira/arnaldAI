@@ -10,6 +10,7 @@ import logging
 from typing import Any, Dict
 
 from .intent_signals import IntentSignals, detect_signals
+from .execution_profile import select_execution_profile
 
 logger = logging.getLogger("arnaldo.kernel")
 
@@ -25,6 +26,8 @@ class RequestComplexity:
         "suggested_tier",
         "needs_external_data",
         "capability_needs",
+        "execution_profile",
+        "execution_capability_ids",
     )
 
     def __init__(
@@ -37,6 +40,8 @@ class RequestComplexity:
         suggested_tier: str = "fast",
         needs_external_data: bool = False,
         capability_needs: list[str] | None = None,
+        execution_profile: str = "full_pipeline",
+        execution_capability_ids: list[str] | None = None,
     ) -> None:
         self.level = level
         self.reason = reason
@@ -45,6 +50,8 @@ class RequestComplexity:
         self.suggested_tier = suggested_tier
         self.needs_external_data = needs_external_data
         self.capability_needs = capability_needs or []
+        self.execution_profile = execution_profile
+        self.execution_capability_ids = execution_capability_ids or []
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +62,8 @@ class RequestComplexity:
             "suggested_tier": self.suggested_tier,
             "needs_external_data": self.needs_external_data,
             "capability_needs": self.capability_needs,
+            "execution_profile": self.execution_profile,
+            "execution_capability_ids": self.execution_capability_ids,
         }
 
 
@@ -77,26 +86,21 @@ def classify_request(
 
 def _signals_to_complexity(signals: IntentSignals) -> RequestComplexity:
     """Converte IntentSignals para RequestComplexity (interface legada)."""
-    use_retrieval = signals.complexity != "conversational"
-
-    # Se precisa de dado externo → NUNCA atalhar
-    if signals.needs_external_data:
-        return RequestComplexity(
-            "complex",
-            "needs_external_data",
-            skip_full_pipeline=False,
-            use_retrieval=True,
-            suggested_tier="expert",
-            needs_external_data=True,
-            capability_needs=signals.capability_needs,
-        )
+    profile = select_execution_profile(
+        level=signals.complexity,
+        needs_external_data=signals.needs_external_data,
+        capability_ids=signals.capability_needs,
+    )
+    use_retrieval = signals.complexity != "conversational" or profile.name == "inline_capability"
 
     return RequestComplexity(
         signals.complexity,
         f"{signals.source}_classified",
-        skip_full_pipeline=signals.skip_full_pipeline,
+        skip_full_pipeline=profile.skip_full_pipeline,
         use_retrieval=use_retrieval,
         suggested_tier=signals.suggested_tier,
-        needs_external_data=False,
+        needs_external_data=signals.needs_external_data,
         capability_needs=signals.capability_needs,
+        execution_profile=profile.name,
+        execution_capability_ids=list(profile.inline_capability_ids),
     )

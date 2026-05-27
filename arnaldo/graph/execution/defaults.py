@@ -86,9 +86,11 @@ def _default_max_tokens_for_action(*, action: str, tier: str) -> int:
         "compose_tooling": 1400,
         "draft_artifact": 1600,
         "synthesize_artifact": 1600,
-        "critic_review": 1400,
-        "risk_review": 1400,
-        "decision_synthesis": 1400,
+        # Review steps return compact structured outputs; smaller budgets reduce
+        # latency without starving the schema.
+        "critic_review": 900,
+        "risk_review": 900,
+        "decision_synthesis": 900,
     }
     if normalized_action in by_action:
         return by_action[normalized_action]

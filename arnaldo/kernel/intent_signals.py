@@ -12,9 +12,19 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
+from arnaldo.constants.discovery_terms import (
+    FILESYSTEM_DISCOVERY_VERBS,
+    LOCAL_CONTEXT_NOUNS,
+    READONLY_SHELL_COMMAND_HINTS,
+    SHELL_CONTEXT_NOUNS,
+    SHELL_EXECUTION_VERBS,
+)
 from arnaldo.graph.text_similarity import node_searchable_text, tfidf_rank
+
+from .execution_profile import select_execution_profile
 
 logger = logging.getLogger("arnaldo.kernel")
 
@@ -65,39 +75,45 @@ def detect_signals(
     if llm_client and getattr(llm_client, "is_configured", False):
         result = _classify_with_llm(text, llm_client)
         if result is not None:
-            return result
+            return _normalize_local_readonly_signals(text, result)
 
     # Camada 2: Graph TF-IDF — classificação aprendida
     if graph is not None:
         result = _classify_with_graph(text, graph)
         if result is not None:
-            return result
+            return _normalize_local_readonly_signals(text, result)
 
     # Camada 3: sem LLM nem grafo → heurística estrutural mínima
     words = text.split()
     if len(words) <= 3:
         # Frases muito curtas sem contexto → provavelmente conversacional
-        return IntentSignals(
-            needs_external_data=False,
-            complexity="conversational",
-            capability_needs=[],
-            skip_full_pipeline=True,
-            suggested_tier="fast",
-            confidence=0.4,
-            source="structural",
-            detail={"reason": "short_no_context", "word_count": len(words)},
+        return _normalize_local_readonly_signals(
+            text,
+            IntentSignals(
+                needs_external_data=False,
+                complexity="conversational",
+                capability_needs=[],
+                skip_full_pipeline=True,
+                suggested_tier="fast",
+                confidence=0.4,
+                source="structural",
+                detail={"reason": "short_no_context", "word_count": len(words)},
+            ),
         )
 
     # Camada 4: conservador puro — pipeline completo
-    return IntentSignals(
-        needs_external_data=False,
-        complexity="complex",
-        capability_needs=[],
-        skip_full_pipeline=False,
-        suggested_tier="expert",
-        confidence=0.2,
-        source="conservative",
-        detail={"reason": "no_llm_no_graph"},
+    return _normalize_local_readonly_signals(
+        text,
+        IntentSignals(
+            needs_external_data=False,
+            complexity="complex",
+            capability_needs=[],
+            skip_full_pipeline=False,
+            suggested_tier="expert",
+            confidence=0.2,
+            source="conservative",
+            detail={"reason": "no_llm_no_graph"},
+        ),
     )
 
 
@@ -170,8 +186,13 @@ def _classify_with_graph(text: str, graph: Any) -> IntentSignals | None:
         word_count=len(text.split()),
     )
 
-    skip = complexity in ("conversational", "intermediate") and not needs_external
-    tier = "fast" if complexity != "complex" else "expert"
+    profile = select_execution_profile(
+        level=complexity,
+        needs_external_data=needs_external,
+        capability_ids=capability_needs,
+    )
+    skip = profile.skip_full_pipeline
+    tier = "expert" if profile.name == "full_pipeline" else "fast"
 
     return IntentSignals(
         needs_external_data=needs_external,
@@ -196,14 +217,14 @@ def _infer_complexity_from_matches(
     word_count: int,
 ) -> str:
     """Infere complexidade a partir dos matches do grafo."""
-    if needs_external:
-        return "complex"
-
     # Roles que indicam tarefas complexas (do bootstrap: planner, analyst, creator)
     complex_roles = {"planner", "creator", "debugger", "analyst"}
     simple_roles = {"responder"}
 
     matched_set = set(matched_roles[:3])
+
+    if needs_external and not (matched_set & complex_roles):
+        return "intermediate"
 
     if matched_set & complex_roles and top_score > 0.1:
         return "complex"
@@ -242,3 +263,133 @@ def _graph_no_match_result(text: str, corpus_size: int) -> IntentSignals:
         source="graph",
         detail={"reason": "no_tfidf_match", "corpus_size": corpus_size},
     )
+
+
+_LOCAL_INLINE_CAPABILITIES = frozenset({"filesystem.local.search", "shell.local.readonly"})
+
+
+def _normalize_local_readonly_signals(text: str, signals: IntentSignals) -> IntentSignals:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return signals
+
+    explicit_shell_command = _contains_readonly_shell_command(lowered)
+    shell_execution_hint = explicit_shell_command or _contains_shell_execution_hint(lowered)
+    filesystem_discovery_hint = _contains_filesystem_discovery_hint(lowered)
+    capability_needs = _dedupe_capability_ids(signals.capability_needs)
+    local_hint_present = shell_execution_hint or filesystem_discovery_hint
+    removed_spurious_local_caps = False
+    if not local_hint_present:
+        filtered_capability_needs = [
+            capability_id
+            for capability_id in capability_needs
+            if capability_id not in _LOCAL_INLINE_CAPABILITIES
+        ]
+        removed_spurious_local_caps = filtered_capability_needs != capability_needs
+        capability_needs = filtered_capability_needs
+
+    if not local_hint_present and not removed_spurious_local_caps:
+        return signals
+
+    mutated = False
+
+    if explicit_shell_command:
+        capability_needs = [
+            "shell.local.readonly",
+            *[
+                capability_id
+                for capability_id in capability_needs
+                if capability_id not in {"shell.local.readonly", "filesystem.local.search"}
+            ],
+        ]
+        mutated = True
+    elif shell_execution_hint and "shell.local.readonly" not in capability_needs:
+        capability_needs = ["shell.local.readonly", *capability_needs]
+        mutated = True
+
+    if filesystem_discovery_hint and not explicit_shell_command:
+        if "filesystem.local.search" not in capability_needs:
+            capability_needs.append("filesystem.local.search")
+            mutated = True
+
+    only_local_inline_caps = bool(capability_needs) and all(
+        capability_id in _LOCAL_INLINE_CAPABILITIES for capability_id in capability_needs
+    )
+    needs_external_data = False if only_local_inline_caps else signals.needs_external_data
+    complexity = signals.complexity
+    if only_local_inline_caps and len(lowered.split()) <= 24:
+        complexity = "intermediate"
+
+    profile = select_execution_profile(
+        level=complexity,
+        needs_external_data=needs_external_data,
+        capability_ids=capability_needs,
+    )
+    suggested_tier = "expert" if profile.name == "full_pipeline" else "fast"
+
+    if (
+        not mutated
+        and complexity == signals.complexity
+        and needs_external_data == signals.needs_external_data
+        and capability_needs == signals.capability_needs
+        and profile.skip_full_pipeline == signals.skip_full_pipeline
+        and suggested_tier == signals.suggested_tier
+    ):
+        return signals
+
+    detail = dict(signals.detail or {})
+    if removed_spurious_local_caps:
+        detail["spurious_local_capabilities_removed"] = True
+    if explicit_shell_command:
+        detail["explicit_shell_command"] = True
+    elif shell_execution_hint:
+        detail["shell_execution_hint"] = True
+    if filesystem_discovery_hint:
+        detail["filesystem_discovery_hint"] = True
+    if only_local_inline_caps:
+        detail["execution_profile"] = profile.name
+
+    return IntentSignals(
+        needs_external_data=needs_external_data,
+        complexity=complexity,
+        capability_needs=capability_needs,
+        skip_full_pipeline=profile.skip_full_pipeline,
+        suggested_tier=suggested_tier,
+        confidence=signals.confidence,
+        source=signals.source,
+        detail=detail,
+    )
+
+
+def _contains_readonly_shell_command(text: str) -> bool:
+    return any(
+        re.search(rf"(?<![a-z0-9_-]){re.escape(term)}(?![a-z0-9_-])", text)
+        for term in READONLY_SHELL_COMMAND_HINTS
+    )
+
+
+def _contains_shell_execution_hint(text: str) -> bool:
+    has_shell_context = any(
+        re.search(rf"\b{re.escape(term)}\b", text) for term in SHELL_CONTEXT_NOUNS
+    )
+    if not has_shell_context:
+        return False
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in SHELL_EXECUTION_VERBS)
+
+
+def _contains_filesystem_discovery_hint(text: str) -> bool:
+    if any(re.search(rf"\b{re.escape(term)}\b", text) for term in FILESYSTEM_DISCOVERY_VERBS):
+        return True
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in LOCAL_CONTEXT_NOUNS)
+
+
+def _dedupe_capability_ids(capability_ids: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for capability_id in capability_ids:
+        current = str(capability_id or "").strip()
+        if not current or current in seen:
+            continue
+        seen.add(current)
+        normalized.append(current)
+    return normalized

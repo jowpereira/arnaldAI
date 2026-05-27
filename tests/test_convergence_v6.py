@@ -199,6 +199,76 @@ class ClassifyWithLLMTest(unittest.TestCase):
         self.assertEqual(result.level, "complex")
         self.assertFalse(result.skip_full_pipeline)
 
+    def test_llm_local_false_positive_is_sanitized_out_of_inline_path(self) -> None:
+        class MockLLM:
+            is_configured = True
+
+            def chat_typed(self, **kwargs: Any) -> SimpleNamespace:
+                parsed = SimpleNamespace(
+                    needs_external_data=False,
+                    complexity="intermediate",
+                    capability_needs=["filesystem.local.search"],
+                    reasoning="mock",
+                )
+                return SimpleNamespace(is_success=True, parsed=parsed, refusal=None)
+
+            def chat(self, **kwargs: Any) -> SimpleNamespace:
+                return SimpleNamespace(content="intermediate")
+
+        result = classify_request(
+            "analise as opções e proponha o próximo passo para validar hipóteses",
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result.level, "intermediate")
+        self.assertEqual(result.execution_profile, "medium_response")
+        self.assertEqual(result.capability_needs, [])
+        self.assertEqual(result.execution_capability_ids, [])
+
+    def test_llm_drops_non_capability_barewords_from_capability_needs(self) -> None:
+        class MockLLM:
+            is_configured = True
+
+            def chat_typed(self, **kwargs: Any) -> SimpleNamespace:
+                parsed = SimpleNamespace(
+                    needs_external_data=True,
+                    complexity="intermediate",
+                    capability_needs=["conversational", "analysis_conceptual", "search.public_web"],
+                    reasoning="mock",
+                )
+                return SimpleNamespace(is_success=True, parsed=parsed, refusal=None)
+
+            def chat(self, **kwargs: Any) -> SimpleNamespace:
+                return SimpleNamespace(content="intermediate")
+
+        result = classify_request("qual o valor do dolar hoje?", llm_client=MockLLM())
+        self.assertEqual(result.capability_needs, ["search.public_web"])
+        self.assertEqual(result.execution_profile, "inline_capability")
+
+    def test_explicit_local_ls_request_routes_inline_shell_profile(self) -> None:
+        class MockLLM:
+            is_configured = True
+
+            def chat_typed(self, **kwargs: Any) -> SimpleNamespace:
+                parsed = SimpleNamespace(
+                    needs_external_data=False,
+                    complexity="complex",
+                    capability_needs=["filesystem.local.search"],
+                    reasoning="mock",
+                )
+                return SimpleNamespace(is_success=True, parsed=parsed, refusal=None)
+
+            def chat(self, **kwargs: Any) -> SimpleNamespace:
+                return SimpleNamespace(content="complex")
+
+        result = classify_request(
+            "dentro do desckto tem uma asta worksace, consegue fazerum ls",
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result.level, "intermediate")
+        self.assertEqual(result.execution_profile, "inline_capability")
+        self.assertTrue(result.skip_full_pipeline)
+        self.assertEqual(result.execution_capability_ids, ["shell.local.readonly"])
+
 
 # ── F4: Persona emergente ────────────────────────────────────────────────
 

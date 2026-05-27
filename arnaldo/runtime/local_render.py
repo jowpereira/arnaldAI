@@ -120,27 +120,15 @@ def render_artifact(
 
 
 def _derive_human_response(task: Any, step_results: List[Dict[str, Any]]) -> str:
-    latest = _latest_result_payload(step_results)
-    sections = latest.get("sections")
-    if isinstance(sections, list):
-        for section in sections:
-            if not isinstance(section, str):
-                continue
-            text = section.strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            if lowered.startswith("status:"):
-                status_text = text.split(":", 1)[1].strip()
-                if status_text:
-                    return status_text
-            if lowered.startswith(("evidence:", "uncertainties:", "incertezas:")):
-                continue
-            return text
+    primary = _preferred_result_payload(step_results, preferred_outputs=("primary_artifact",))
+    primary_text = _extract_response_text(primary)
+    if primary_text:
+        return primary_text
 
-    status = str(latest.get("status", "")).strip()
-    if status:
-        return status
+    latest = _latest_result_payload(step_results)
+    latest_text = _extract_response_text(latest)
+    if latest_text:
+        return latest_text
 
     goal = str(task.goal.get("statement", "")).strip()
     if goal:
@@ -149,7 +137,10 @@ def _derive_human_response(task: Any, step_results: List[Dict[str, Any]]) -> str
 
 
 def _derive_next_actions(step_results: List[Dict[str, Any]]) -> str:
-    latest = _latest_result_payload(step_results)
+    latest = _preferred_result_payload(
+        step_results,
+        preferred_outputs=("critic_review", "risk_review", "decision_synthesis", "primary_artifact"),
+    )
     uncertainties = latest.get("uncertainties")
     if isinstance(uncertainties, list):
         cleaned = [str(item).strip() for item in uncertainties if str(item).strip()]
@@ -164,3 +155,59 @@ def _latest_result_payload(step_results: List[Dict[str, Any]]) -> Dict[str, Any]
         if isinstance(result, dict):
             return result
     return {}
+
+
+def _preferred_result_payload(
+    step_results: List[Dict[str, Any]],
+    *,
+    preferred_outputs: tuple[str, ...],
+) -> Dict[str, Any]:
+    for output_id in preferred_outputs:
+        for item in reversed(step_results):
+            if str(item.get("output", "")).strip() != output_id:
+                continue
+            result = item.get("result")
+            if isinstance(result, dict):
+                return result
+    return _latest_result_payload(step_results)
+
+
+def _extract_response_text(result: Dict[str, Any]) -> str:
+    sections = result.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            text = str(section).strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered.startswith(
+                (
+                    "status:",
+                    "evidence:",
+                    "execution_evidence:",
+                    "uncertainties:",
+                    "incertezas:",
+                    "warnings:",
+                    "avisos:",
+                    "next_actions:",
+                )
+            ):
+                continue
+            return text
+
+    evidence = result.get("evidence")
+    if isinstance(evidence, list):
+        cleaned = [str(item).strip() for item in evidence if str(item).strip()]
+        if cleaned:
+            return cleaned[0]
+
+    warnings = result.get("warnings")
+    if isinstance(warnings, list):
+        cleaned = [str(item).strip() for item in warnings if str(item).strip()]
+        if cleaned:
+            return cleaned[0]
+
+    status = str(result.get("status", "")).strip()
+    if status:
+        return status
+    return ""

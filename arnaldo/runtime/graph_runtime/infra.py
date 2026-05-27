@@ -100,18 +100,20 @@ def _build_request(task: Any, capability_resolution: Dict[str, Any]) -> str:
         for item in task.deliverables
         if str(item.get("id", "")).strip()
     ]
+    user_request = _extract_primary_user_request(task)
 
-    return "\n".join(
-        [
-            "Goal: %s" % task.goal.get("statement", ""),
-            "GoalType: %s" % task.goal.get("type", ""),
-            "Deliverables: %s" % json.dumps(deliverables, ensure_ascii=True),
-            "CapabilityNeeds: %s" % json.dumps(capability_needs, ensure_ascii=True),
-            "MissingCapabilities: %s" % json.dumps(missing, ensure_ascii=True),
-            "DegradedCapabilities: %s" % json.dumps(degraded, ensure_ascii=True),
-            "Uncertainties: %s" % json.dumps(uncertainties, ensure_ascii=True),
-        ]
-    )
+    lines = [
+        "Goal: %s" % task.goal.get("statement", ""),
+        "GoalType: %s" % task.goal.get("type", ""),
+        "Deliverables: %s" % json.dumps(deliverables, ensure_ascii=True),
+        "CapabilityNeeds: %s" % json.dumps(capability_needs, ensure_ascii=True),
+        "MissingCapabilities: %s" % json.dumps(missing, ensure_ascii=True),
+        "DegradedCapabilities: %s" % json.dumps(degraded, ensure_ascii=True),
+        "Uncertainties: %s" % json.dumps(uncertainties, ensure_ascii=True),
+    ]
+    if user_request:
+        lines.insert(0, "UserRequest: %s" % user_request)
+    return "\n".join(lines)
 
 
 def _select_execution_mode(topology: str) -> str:

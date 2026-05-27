@@ -46,6 +46,62 @@ SHELL_CONTEXT_NOUNS: tuple[str, ...] = (
     "comando",
 )
 
+# Comandos read-only explícitos que devem sinalizar intenção operacional local.
+READONLY_SHELL_COMMAND_HINTS: tuple[str, ...] = (
+    "get-childitem",
+    "resolve-path",
+    "get-command",
+    "test-path",
+    "where",
+    "which",
+    "pwd",
+    "ls",
+    "dir",
+)
+
+# Pistas lexicais para lookup externo atual/read-only.
+LIVE_LOOKUP_FRESHNESS_HINTS: tuple[str, ...] = (
+    "hoje",
+    "agora",
+    "atual",
+    "atualmente",
+    "neste momento",
+)
+
+LIVE_LOOKUP_TOPIC_HINTS: tuple[str, ...] = (
+    "valor",
+    "preço",
+    "preco",
+    "cotação",
+    "cotacao",
+    "câmbio",
+    "cambio",
+    "dólar",
+    "dolar",
+    "euro",
+    "bitcoin",
+    "btc",
+    "clima",
+    "temperatura",
+    "notícia",
+    "noticia",
+    "status",
+    "taxa",
+)
+
+WEB_SEARCH_FOLLOWUP_HINTS: tuple[str, ...] = (
+    "google",
+    "pesquise",
+    "pesquisar",
+    "pesquisa",
+    "busque",
+    "buscar",
+    "busca",
+    "procure",
+    "procura",
+    "esquise",
+)
+
 # Verbos genéricos que SÓ indicam execução quando acompanhados de contexto técnico.
 # Sem co-ocorrência, são falso-positivos ("criar coragem", "sistema solar").
 AMBIGUOUS_VERBS: tuple[str, ...] = (

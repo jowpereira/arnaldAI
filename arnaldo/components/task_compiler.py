@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from arnaldo.capabilities.semantics import build_capability_need
 from arnaldo.contracts import IntentIR, TaskIR, new_id, utc_now
 
 
@@ -101,17 +102,17 @@ def build_capability_needs(
     extra_needs: List[str] | None = None,
 ) -> List[Dict[str, Any]]:
     base = [
-        {"id": "intent.structure", "required": True},
-        {"id": "work.decompose", "required": True},
-        {"id": "organization.generate", "required": True},
-        {"id": "artifact.draft", "required": True},
-        {"id": "validation.critic_review", "required": True},
-        {"id": "evidence.record", "required": True},
+        build_capability_need("intent.structure"),
+        build_capability_need("work.decompose"),
+        build_capability_need("organization.generate"),
+        build_capability_need("artifact.draft"),
+        build_capability_need("validation.critic_review"),
+        build_capability_need("evidence.record"),
     ]
     existing_ids = {item["id"] for item in base}
     for cap_id in extra_needs or []:
         if cap_id not in existing_ids:
-            base.append({"id": cap_id, "required": True})
+            base.append(build_capability_need(cap_id))
             existing_ids.add(cap_id)
     return base
 

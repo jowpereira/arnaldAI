@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import platform
 import tempfile
 
 from arnaldo.graph import (
@@ -12,6 +13,7 @@ from arnaldo.graph import (
     StepContext,
     SynapseNode,
 )
+from arnaldo.graph.execution.tooling import _build_capability_params
 from arnaldo.llm.structured import TypedResponse
 
 
@@ -168,6 +170,30 @@ def test_execute_synapse_defaults_low_effort_for_artifact_actions() -> None:
     assert result.success is True
     kwargs = client.calls[0]["kwargs"]
     assert kwargs["reasoning_effort"] == "low"
+
+
+def test_execute_synapse_uses_compact_budget_for_review_actions() -> None:
+    graph, synapse = _build_graph_with_synapse()
+    review_synapse = synapse.with_payload_merge(action="critic_review")
+    graph.add_node(review_synapse)
+    client = FakeTypedClient(responses=[_typed_success()])
+    engine = ExecutionEngine(
+        graph=graph,
+        llm_client=client,
+        model_registry={"SynapseOutput": SynapseOutput},
+    )
+
+    result = engine.execute_synapse(
+        review_synapse.id,
+        request="avalie riscos do plano",
+        context=StepContext(),
+    )
+
+    assert result.success is True
+    kwargs = client.calls[0]["kwargs"]
+    assert kwargs["timeout"] == 90.0
+    assert kwargs["max_tokens"] == 900
+    assert kwargs["reasoning_effort"] == "medium"
 
 
 def test_execute_synapse_defaults_high_effort_for_god_tier() -> None:
@@ -671,6 +697,30 @@ def test_execute_synapse_tooling_fails_when_module_missing() -> None:
     updated = graph.get_node(synapse.id)
     assert updated is not None
     assert updated.stats.failures == 1
+
+
+def test_build_capability_params_uses_user_request_for_web_queries() -> None:
+    params = _build_capability_params(
+        "search.public_web",
+        "UserRequest: qual o valor do dolar hoje\nGoal: responder",
+        StepContext(),
+    )
+
+    assert params["query"] == "qual o valor do dolar hoje"
+    assert params["max_results"] == 5
+
+
+def test_build_capability_params_maps_ls_to_safe_shell_command() -> None:
+    params = _build_capability_params(
+        "shell.local.readonly",
+        "UserRequest: dentro do desckto tem uma asta worksace, consegue fazerum ls\nGoal: listar",
+        StepContext(),
+    )
+
+    expected = "dir" if platform.system() == "Windows" else "ls"
+    assert params["command"] == expected
+    assert isinstance(params["args"], list)
+    assert params["args"], "esperava pelo menos um argumento de diretório"
 
 
 def test_downstream_llm_receives_structured_recent_tool_outputs() -> None:

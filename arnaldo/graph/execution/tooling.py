@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import platform
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -14,6 +17,81 @@ from ..nodes import SynapseNode
 
 # Nomes de diretórios permitidos para carregamento dinâmico de módulos
 _ALLOWED_DIR_NAMES: frozenset[str] = frozenset({"tool_forge", "generated"})
+_SHELL_COMMAND_HINTS: tuple[str, ...] = (
+    "get-childitem",
+    "resolve-path",
+    "get-command",
+    "test-path",
+    "where",
+    "which",
+    "pwd",
+    "ls",
+    "dir",
+)
+_SHELL_FILLER_TOKENS: frozenset[str] = frozenset(
+    {
+        "a",
+        "aqui",
+        "agora",
+        "ao",
+        "as",
+        "com",
+        "consigo",
+        "consegue",
+        "da",
+        "de",
+        "dentro",
+        "do",
+        "dos",
+        "e",
+        "em",
+        "favor",
+        "faz",
+        "fazer",
+        "fazerum",
+        "me",
+        "na",
+        "nas",
+        "no",
+        "nos",
+        "o",
+        "os",
+        "ou",
+        "para",
+        "por",
+        "pra",
+        "que",
+        "tem",
+        "um",
+        "uma",
+        "vc",
+        "voce",
+        "você",
+    }
+)
+_PATH_HINT_STOPWORDS: frozenset[str] = _SHELL_FILLER_TOKENS | frozenset(
+    {
+        "arquivo",
+        "asta",
+        "command",
+        "comando",
+        "comandos",
+        "diretorio",
+        "diretório",
+        "dir",
+        "find",
+        "getchilditem",
+        "ls",
+        "path",
+        "pasta",
+        "pwd",
+        "resolvepath",
+        "shell",
+        "terminal",
+        "where",
+        "which",
+    }
+)
 
 
 def _is_safe_module_path(module_path: Path) -> bool:
@@ -272,11 +350,157 @@ def _build_capability_params(
     context: StepContext,
 ) -> dict[str, Any]:
     """Constrói parâmetros para a capability a partir do request e contexto."""
+    request_text = _extract_user_request(request)
     if capability_id.startswith("search."):
-        return {"query": request, "max_results": 5}
+        return {"query": request_text or request, "max_results": 5}
     if capability_id.startswith("connector."):
         recent = context.snapshot_recent_outputs(limit=1)
         if recent and isinstance(recent, dict):
             return dict(recent)
-        return {"url": request}
-    return {"input": request}
+        return {"url": request_text or request}
+    if capability_id == "filesystem.local.search":
+        return _build_filesystem_params(request_text or request)
+    if capability_id == "shell.local.readonly":
+        return _build_shell_params(request_text or request)
+    return {"input": request_text or request}
+
+
+def _extract_user_request(request: str) -> str:
+    for line in str(request).splitlines():
+        if line.startswith("UserRequest:") or line.startswith("UserMessage:"):
+            return line.split(":", 1)[1].strip()
+    return str(request).strip()
+
+
+def _build_filesystem_params(request_text: str) -> dict[str, Any]:
+    matched_root = _match_workspace_path_from_request(request_text)
+    pattern = _extract_filesystem_pattern(request_text)
+    if matched_root and re.search(
+        r"\b(ls|listar|liste|listagem|mostrar|mostre|mostra)\b",
+        request_text.lower(),
+    ):
+        pattern = "*"
+    params: dict[str, Any] = {"pattern": pattern}
+    if matched_root:
+        params["roots"] = [matched_root]
+    return params
+
+
+def _build_shell_params(request_text: str) -> dict[str, Any]:
+    command, args = _extract_shell_command(request_text)
+    matched_path = _extract_explicit_path(request_text) or _match_workspace_path_from_request(
+        request_text
+    )
+    if not command:
+        command = _canonical_shell_command("ls")
+    if matched_path and not args:
+        args = [matched_path]
+    if not args and command in {"dir", "ls", "get-childitem"}:
+        args = ["."]
+    return {"command": command, "args": args}
+
+
+def _extract_filesystem_pattern(request_text: str) -> str:
+    patterns = (
+        r"(?<!\S)(\*+[A-Za-z0-9._-]+\*+|\*+[A-Za-z0-9._-]+|[A-Za-z0-9._-]+\*+)(?!\S)",
+        r"[\"']([^\"']{2,80})[\"']",
+        r"\b(?:pasta|asta|arquivo|diret[oó]rio|diretorio)\s+([A-Za-z0-9._-]{2,80})",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, request_text, flags=re.IGNORECASE):
+            candidate = next((group for group in match.groups() if group), "")
+            wrapped = _wrap_glob(candidate)
+            if wrapped != "*":
+                return wrapped
+    for token in reversed(_extract_path_hint_tokens(request_text)):
+        wrapped = _wrap_glob(token)
+        if wrapped != "*":
+            return wrapped
+    return "*"
+
+
+def _extract_shell_command(request_text: str) -> tuple[str, list[str]]:
+    lowered = request_text.lower()
+    for command in _SHELL_COMMAND_HINTS:
+        match = re.search(rf"(?<![a-z0-9_-]){re.escape(command)}(?![a-z0-9_-])", lowered)
+        if not match:
+            continue
+        tail = request_text[match.end() :]
+        return _canonical_shell_command(command), _extract_shell_args(tail)
+    if any(term in lowered for term in ("listar", "liste", "listagem", "mostrar", "mostre")):
+        return _canonical_shell_command("ls"), []
+    return "", []
+
+
+def _extract_shell_args(raw_tail: str) -> list[str]:
+    args: list[str] = []
+    for chunk in re.findall(r'"[^"]+"|\'[^\']+\'|[^\s,;]+', raw_tail):
+        cleaned = chunk.strip("`\"' ,.;:!?()[]{}")
+        normalized = cleaned.lower()
+        if not cleaned or normalized in _SHELL_FILLER_TOKENS:
+            continue
+        args.append(cleaned)
+    return args[:4]
+
+
+def _canonical_shell_command(command: str) -> str:
+    normalized = str(command).strip().lower()
+    if platform.system() == "Windows" and normalized == "ls":
+        return "dir"
+    return normalized
+
+
+def _wrap_glob(candidate: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "", str(candidate).strip())
+    if not cleaned:
+        return "*"
+    return f"*{cleaned}*"
+
+
+def _extract_explicit_path(request_text: str) -> str:
+    patterns = (
+        r"[A-Za-z]:\\[^\s\"'`]+",
+        r"(?:/[^\\s\"'`]+)+",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, request_text)
+        if match:
+            return match.group(0)
+    return ""
+
+
+def _match_workspace_path_from_request(request_text: str) -> str:
+    cwd = Path.cwd().resolve()
+    candidates = [cwd, *cwd.parents]
+    best_path = ""
+    best_score = 0.0
+    best_depth = -1
+    for token in _extract_path_hint_tokens(request_text):
+        normalized_token = _normalize_hint_token(token)
+        if len(normalized_token) < 3:
+            continue
+        for candidate in candidates:
+            candidate_name = _normalize_hint_token(candidate.name)
+            if not candidate_name:
+                continue
+            score = SequenceMatcher(None, normalized_token, candidate_name).ratio()
+            depth = len(candidate.parts)
+            if score > best_score or (score == best_score and depth > best_depth):
+                best_score = score
+                best_depth = depth
+                best_path = str(candidate)
+    return best_path if best_score >= 0.74 else ""
+
+
+def _extract_path_hint_tokens(request_text: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in re.findall(r"[A-Za-z0-9._-]{3,}", request_text):
+        normalized = _normalize_hint_token(raw)
+        if not normalized or normalized in _PATH_HINT_STOPWORDS:
+            continue
+        tokens.append(raw)
+    return tokens
+
+
+def _normalize_hint_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())

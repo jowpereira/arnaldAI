@@ -49,6 +49,10 @@ def test_detects_caminho() -> None:
     assert _contains_structured_execution_intent("qual o caminho do executável") is True
 
 
+def test_detects_explicit_ls_command() -> None:
+    assert _contains_structured_execution_intent("consegue fazer um ls aqui") is True
+
+
 def test_ignores_pure_conversation() -> None:
     assert _contains_structured_execution_intent("legal e vc quem e") is False
 
@@ -204,4 +208,10 @@ def test_rejects_conversational_with_filesystem_capability() -> None:
 def test_rejects_conversational_with_shell_capability() -> None:
     task = _make_task("me ajuda aqui")
     cap_res = {"missing": [{"id": "shell.local.readonly"}], "degraded": []}
+    assert _is_conversational_cli_turn(task=task, capability_resolution=cap_res) is False
+
+
+def test_rejects_conversational_with_available_shell_capability() -> None:
+    task = _make_task("me ajuda aqui")
+    cap_res = {"available": [{"id": "shell.local.readonly"}], "missing": [], "degraded": []}
     assert _is_conversational_cli_turn(task=task, capability_resolution=cap_res) is False

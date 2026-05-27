@@ -82,6 +82,6 @@ ROLE_TIER_PREFERENCE: dict[str, str] = {
     "operator": "expert",
     "explorer": "expert",
     "synthesizer": "expert",
-    "critic": "god",
+    "critic": "expert",
     "analyst": "expert",
 }

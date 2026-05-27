@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import re
 from typing import Any, Dict
 
 from arnaldo.components import (
@@ -36,9 +37,15 @@ from arnaldo.graph.brain import (
     activate as brain_activate,
     BRAIN_CONFIDENCE_THRESHOLD,
 )
+from arnaldo.constants.discovery_terms import (
+    LIVE_LOOKUP_FRESHNESS_HINTS,
+    LIVE_LOOKUP_TOPIC_HINTS,
+    READONLY_SHELL_COMMAND_HINTS,
+    WEB_SEARCH_FOLLOWUP_HINTS,
+)
 
 from .classify import classify_request
-from .fast_path import fast_response, medium_response
+from .fast_path import fast_response, inline_capability_response, medium_response
 from .pipeline import run_full_pipeline
 from .bootstrap import bootstrap_graph
 from .metrics import MetricsCollector
@@ -220,7 +227,10 @@ class ArnaldoKernel:
         with self.metrics.phase("classify"):
             decision = brain_activate(graph, request)
             # Fallback: se grafo não tem ativação forte, usa classify_request
-            if decision.confidence < BRAIN_CONFIDENCE_THRESHOLD:
+            if decision.confidence < BRAIN_CONFIDENCE_THRESHOLD or _should_prefer_semantic_classification(
+                request,
+                decision,
+            ):
                 complexity = classify_request(request, graph=graph, llm_client=llm_for_classify)
             else:
                 complexity = _decision_to_complexity(decision)
@@ -231,6 +241,21 @@ class ArnaldoKernel:
         prospect = create_prospective_memory(decision, request)
         if prospect is not None:
             self.memory.append(prospect)
+
+        if complexity.execution_profile == "inline_capability":
+            return inline_capability_response(
+                request=request,
+                session_id=session_id,
+                autonomy=autonomy,
+                terms_accepted=terms_accepted,
+                run_id=run_id,
+                output_dir=output_dir,
+                sessions=self.sessions,
+                memory=self.memory,
+                llm_client=self._llm_client,
+                capability_ids=complexity.execution_capability_ids or complexity.capability_needs,
+                suggested_tier=complexity.suggested_tier,
+            )
 
         # GAP 10: Foraging epistêmico — busca externa se gap + web disponível
         if decision.knowledge_gap and not complexity.skip_full_pipeline:
@@ -279,7 +304,7 @@ class ArnaldoKernel:
                         self.memory._persist_graph_state()
 
         # === FAST PATH: conversacional → single LLM call ===
-        if complexity.skip_full_pipeline and complexity.level == "conversational":
+        if complexity.execution_profile == "fast_response":
             return fast_response(
                 request=request,
                 session_id=session_id,
@@ -293,7 +318,7 @@ class ArnaldoKernel:
             )
 
         # === MEDIUM PATH: intermediate → retrieval + routing + 1 LLM call ===
-        if complexity.skip_full_pipeline and complexity.level == "intermediate":
+        if complexity.execution_profile == "medium_response":
             return medium_response(
                 request=request,
                 session_id=session_id,
@@ -334,3 +359,31 @@ class ArnaldoKernel:
         return _build_runtime_org(
             self.runtime, self.organizations, task, decision, capability_resolution
         )
+
+
+def _should_prefer_semantic_classification(request: str, decision: Any) -> bool:
+    lowered = " ".join(str(request or "").lower().split())
+    if not lowered:
+        return False
+    decision_caps = {str(cap).strip() for cap in getattr(decision, "capability_needs", []) or []}
+    if not any(
+        re.search(rf"(?<![a-z0-9_-]){re.escape(term)}(?![a-z0-9_-])", lowered)
+        for term in READONLY_SHELL_COMMAND_HINTS
+    ):
+        explicit_local_command_missing = False
+    else:
+        local_capabilities = {"shell.local.readonly", "filesystem.local.search"}
+        explicit_local_command_missing = decision_caps.isdisjoint(local_capabilities)
+    if explicit_local_command_missing:
+        return True
+    if _contains_live_lookup_signal(lowered):
+        external_capabilities = {"search.public_web", "connector.http.generic"}
+        return decision_caps.isdisjoint(external_capabilities)
+    return False
+
+
+def _contains_live_lookup_signal(text: str) -> bool:
+    freshness = any(term in text for term in LIVE_LOOKUP_FRESHNESS_HINTS)
+    lookup_topic = any(term in text for term in LIVE_LOOKUP_TOPIC_HINTS)
+    web_followup = any(term in text for term in WEB_SEARCH_FOLLOWUP_HINTS)
+    return web_followup or (freshness and lookup_topic)
