@@ -112,10 +112,10 @@ class MemoryStore:
         target_signature = target
         source_node = self._graph.get_node(source)
         if isinstance(source_node, MemoryNode) and isinstance(source_node.payload, dict):
-            source_signature = association_signature(source_node.payload, fallback=source)
+            source_signature = association_signature(source_node.payload, default=source)
         target_node = self._graph.get_node(target)
         if isinstance(target_node, MemoryNode) and isinstance(target_node.payload, dict):
-            target_signature = association_signature(target_node.payload, fallback=target)
+            target_signature = association_signature(target_node.payload, default=target)
         candidate = self._candidates.get(f"{source_signature}->{target_signature}")
         if candidate is None:
             candidate = self._candidates.get(f"{source}->{target}")

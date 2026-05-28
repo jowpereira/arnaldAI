@@ -128,7 +128,7 @@ def _search_ddg(query: str, *, max_results: int = 5) -> list[dict[str, str]]:
 
 
 def _search_bing(query: str, *, max_results: int = 5) -> list[dict[str, str]]:
-    """Faz busca web via Bing RSS/HTML como fallback."""
+    """Faz busca web via Bing RSS/HTML como alternativa."""
     url = "https://www.bing.com/search?format=rss&q=" + urllib.parse.quote(query)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:

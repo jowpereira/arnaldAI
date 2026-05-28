@@ -220,7 +220,7 @@ class ClassifyWithLLMTest(unittest.TestCase):
             llm_client=MockLLM(),
         )
         self.assertEqual(result.level, "intermediate")
-        self.assertEqual(result.execution_profile, "medium_response")
+        self.assertEqual(result.execution_profile, "retrieval_augmented")
         self.assertEqual(result.capability_needs, [])
         self.assertEqual(result.execution_capability_ids, [])
 
@@ -242,7 +242,7 @@ class ClassifyWithLLMTest(unittest.TestCase):
 
         result = classify_request("qual o valor do dolar hoje?", llm_client=MockLLM())
         self.assertEqual(result.capability_needs, ["search.public_web"])
-        self.assertEqual(result.execution_profile, "inline_capability")
+        self.assertEqual(result.execution_profile, "live_lookup")
 
     def test_explicit_local_ls_request_routes_inline_shell_profile(self) -> None:
         class MockLLM:
@@ -265,7 +265,7 @@ class ClassifyWithLLMTest(unittest.TestCase):
             llm_client=MockLLM(),
         )
         self.assertEqual(result.level, "intermediate")
-        self.assertEqual(result.execution_profile, "inline_capability")
+        self.assertEqual(result.execution_profile, "tool_execution_local")
         self.assertTrue(result.skip_full_pipeline)
         self.assertEqual(result.execution_capability_ids, ["shell.local.readonly"])
 

@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from arnaldo.components import CapabilityRegistry
-from arnaldo.contracts import Capability
+from arnaldo.capabilities.catalog import CapabilityCatalog
 from arnaldo.session import SessionManager, SessionState
 from arnaldo.storage import RunStore
 from arnaldo.utils.normalize import normalize_module_path as _normalize_module_path
@@ -16,7 +15,7 @@ from . import session as _session
 
 
 def sync_capabilities_from_graph(
-    capabilities: CapabilityRegistry,
+    capabilities: CapabilityCatalog,
     sessions: SessionManager,
     graph_path: Path,
     *,
@@ -59,45 +58,31 @@ def sync_capabilities_from_graph(
         last_tool_execution_status = str(node.payload.get("last_tool_execution_status", "")).strip()
         existing = capabilities.get(capability_id)
         if not module_path and existing is not None:
-            module_path = _normalize_module_path(existing.policies.get("module_path"))
+            module_path = _normalize_module_path(existing.fqn)
         if real_execution_successes <= 0 and existing is not None:
-            real_execution_successes = _normalize_positive_int(
-                existing.policies.get("real_execution_successes")
-            )
+            dyn = capabilities.get_dynamic_meta(capability_id)
+            if dyn:
+                real_execution_successes = _normalize_positive_int(
+                    dyn.get("real_execution_successes")
+                )
         if not last_tool_execution_status and existing is not None:
-            last_tool_execution_status = str(
-                existing.policies.get("last_tool_execution_status", "")
-            ).strip()
+            dyn = capabilities.get_dynamic_meta(capability_id)
+            if dyn:
+                last_tool_execution_status = str(dyn.get("last_tool_execution_status", "")).strip()
         health = _resolve_capability_health(
             maturity=maturity,
             last_tool_execution_status=last_tool_execution_status,
         )
-        policies: Dict[str, Any] = {
-            "requires_approval": False,
-            "maturity": maturity,
-            "source": "execution_graph",
-            "graph_node_id": node.id,
-        }
-        if module_path:
-            policies["module_path"] = module_path
-        if real_execution_successes > 0:
-            policies["real_execution_successes"] = real_execution_successes
-        if last_tool_execution_status:
-            policies["last_tool_execution_status"] = last_tool_execution_status
-        capability = Capability(
-            id=capability_id,
+        capabilities.register_dynamic(
+            capability_id,
             name="Graph %s" % capability_id,
             description="Capability sincronizada do grafo de execução.",
-            inputs={"payload": "object"},
-            outputs={"status": "object", "data": "object"},
-            risk={
-                "level": str(node.payload.get("risk_level", "medium")),
-                "health": health,
-                "reasons": ["graph_runtime_sync"],
-            },
-            policies=policies,
+            module_path=module_path or "",
+            maturity=maturity,
+            health=health,
+            real_execution_successes=real_execution_successes,
+            last_tool_execution_status=last_tool_execution_status,
         )
-        capabilities.register(capability)
         item: Dict[str, Any] = {
             "id": capability_id,
             "maturity": maturity,
@@ -146,13 +131,13 @@ def _normalize_positive_int(value: Any) -> int:
 
 def _resolve_capability_health(*, maturity: str, last_tool_execution_status: str) -> str:
     status = last_tool_execution_status.strip().lower()
-    if status in {"failed", "error", "not_implemented", "fallback"}:
+    if status in {"failed", "error", "not_implemented", "degraded"}:
         return "degraded"
     return "stable" if maturity in {"tested", "trusted"} else "degraded"
 
 
 def post_process_graph(
-    capabilities: CapabilityRegistry,
+    capabilities: CapabilityCatalog,
     sessions: SessionManager,
     tool_forge: Any,
     execution_graph: Path,

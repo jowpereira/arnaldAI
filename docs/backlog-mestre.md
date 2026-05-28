@@ -62,7 +62,7 @@ operações corporativas fora do repositório.
 - `[x]` `chat_typed` com `response_format=json_schema` e parse tipado via dataclass
 - `[x]` `IntentCompiler` migrado para structured output tipado
 - `[x]` `SynapseNode` já aceita `output_contract_model` e persiste `output_schema`
-- `[x]` Sync de capabilities dinâmicas do `execution-graph` para o `CapabilityRegistry`
+- `[x]` Sync de capabilities dinâmicas do `execution-graph` para o `CapabilityCatalog`
 - `[x]` Kernel em modo `graph` já cria organização seed nativa de grafo (workflow vazio), delegando compilação do plano ao runtime
 - `[x]` `GraphRuntime` persiste o plano realmente executado em `graph-workflow-materialized.json`, tornando o workflow materializado auditável por run
 - `[x]` Execução em grafo isolada ao workflow materializado do run (sinapses legadas fora do plano não são executadas)
@@ -85,7 +85,7 @@ operações corporativas fora do repositório.
 - `[x]` Arestas `ACTIVATES` de tooling agora evitam encadeamento cruzado entre capabilities distintas e fazem pareamento por `capability_id` para estabilização/execução paralela
 - `[x]` Execução em `ACTIVATES` agora reforça/degrada peso das arestas conforme outcome real do synapse alvo, mantendo plasticidade explícita da rede de conexões
 - `[x]` Execução paralela agora cria/reforça arestas `COLLABORATED_WITH` entre branches bem-sucedidos no mesmo nível, materializando colaboração dinâmica entre agentes/sinapses
-- `[x]` Sync kernel<-grafo agora persiste sinais de execução real (`real_execution_successes`, `last_tool_execution_status`) no `CapabilityRegistry` para continuidade entre runs
+- `[x]` Sync kernel<-grafo agora persiste sinais de execução real (`real_execution_successes`, `last_tool_execution_status`) no `CapabilityCatalog` para continuidade entre runs
 - `[x]` `execute_tooling` agora afeta maturidade da capability nos dois sentidos: reforça com sucesso real e penaliza com demotion quando `status` é não real (`not_implemented/failed/error/fallback`)
 - `[x]` ToolForge passou a validar scaffolds de forma funcional (`py_compile` + `run(payload)`), reduzindo risco de módulo inválido já no nascimento
 - `[~]` `MultiAgentRuntime` deixou de ser placeholder e passou a executar workflow por ondas de agentes (com paralelismo por ação/capability, `agent_bus` preenchido e suporte a `execute_tooling` por `module_path`)
@@ -407,7 +407,7 @@ operações corporativas fora do repositório.
 
 ### CAP-001 — Registry de capabilities com resolução de missing
 - Status: `[x]`
-- Evidência: `capability_registry.py` (required ausente -> `missing`; optional ausente -> `degraded`)
+- Evidência: `catalog.py` (required ausente -> `missing`; optional ausente -> `degraded`)
 - Lacuna: metadados de maturidade ainda simples
 - Critério de aceite: resolução consistente de required/missing/degraded
 

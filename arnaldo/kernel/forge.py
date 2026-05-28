@@ -6,7 +6,8 @@ import copy
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.session import SessionManager, SessionState
 from arnaldo.storage import RunStore
 from arnaldo.utils.normalize import normalize_module_path as _normalize_module_path
@@ -16,7 +17,7 @@ from . import session as _session
 
 def auto_forge_graph_capabilities(
     tool_forge: ToolForge,
-    capabilities: CapabilityRegistry,
+    capabilities: CapabilityCatalog,
     sessions: SessionManager,
     *,
     graph_path: Path,
@@ -39,12 +40,16 @@ def auto_forge_graph_capabilities(
         seen.add(capability_id)
         if not capability_id.startswith(("connector.", "tool.", "search.")):
             continue
+        # Não forjar capabilities nativas do catálogo
+        if capabilities.is_builtin(capability_id):
+            report["skipped"].append({"id": capability_id, "reason": "builtin_capability"})
+            continue
 
         maturity = str(item.get("maturity", "")).strip().lower() or "draft"
         module_path = _normalize_module_path(item.get("module_path"))
         existing = capabilities.get(capability_id)
         if not module_path and existing is not None:
-            module_path = _normalize_module_path(existing.policies.get("module_path"))
+            module_path = _normalize_module_path(existing.fqn)
         if module_path:
             report["skipped"].append({"id": capability_id, "reason": "module_path_already_known"})
             continue
@@ -64,7 +69,14 @@ def auto_forge_graph_capabilities(
     forge = tool_forge.forge_missing(copy.deepcopy(candidates), session.id)
     current = session
     for capability in forge["capabilities"]:
-        capabilities.register(capability)
+        capabilities.register_dynamic(
+            capability.id,
+            name=capability.name,
+            description=capability.description,
+            module_path=str(capability.policies.get("module_path", "")),
+            maturity=str(capability.policies.get("maturity", "draft")),
+            health=str(capability.risk.get("health", "degraded")),
+        )
     report["created"] = list(forge["created"])
     report["failed"] = list(forge["failed"])
 

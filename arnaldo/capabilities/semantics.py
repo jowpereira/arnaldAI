@@ -41,45 +41,26 @@ class CapabilitySummary:
         return bool(self.inline_lookup_executor_ids)
 
 
-_BUILTIN_TRAITS: dict[str, CapabilityTraits] = {
-    "search.public_web": CapabilityTraits(
-        capability_id="search.public_web",
-        family="search",
-        locality="remote",
-        access_mode="lookup",
-        effect="read",
-        freshness="current",
-        inline_lookup_executor_id="search.public_web",
-    ),
-    "connector.http.generic": CapabilityTraits(
-        capability_id="connector.http.generic",
-        family="connector",
-        locality="remote",
-        access_mode="integration",
-        effect="unknown",
-        freshness="unknown",
-    ),
-    "filesystem.local.search": CapabilityTraits(
-        capability_id="filesystem.local.search",
-        family="filesystem",
-        locality="local",
-        access_mode="discovery",
-        effect="read",
-        freshness="stable",
-        inline_lookup_executor_id="filesystem.local.search",
-    ),
-    "shell.local.readonly": CapabilityTraits(
-        capability_id="shell.local.readonly",
-        family="shell",
-        locality="local",
-        access_mode="command",
-        effect="read",
-        freshness="stable",
-        inline_lookup_executor_id="shell.local.readonly",
-    ),
-}
-
 _INTERNAL_FAMILIES = {"intent", "work", "organization", "artifact", "validation", "evidence"}
+
+
+def _traits_from_catalog(capability_id: str) -> CapabilityTraits | None:
+    """Tenta derivar traits do catálogo unificado."""
+    from arnaldo.capabilities.catalog import get_catalog
+
+    desc = get_catalog().get(capability_id)
+    if desc is None:
+        return None
+    return CapabilityTraits(
+        capability_id=desc.capability_id,
+        family=desc.family,
+        locality=desc.locality,
+        access_mode=desc.access_mode,
+        effect=desc.effect,
+        freshness=desc.freshness,
+        abstract=False,
+        inline_lookup_executor_id=(desc.capability_id if desc.supports_inline else ""),
+    )
 
 
 def describe_capability_id(capability_id: str) -> CapabilityTraits:
@@ -94,14 +75,23 @@ def describe_capability_id(capability_id: str) -> CapabilityTraits:
             effect="unknown",
             freshness="unknown",
         )
-    builtin = _BUILTIN_TRAITS.get(normalized)
-    if builtin is not None:
-        return builtin
+    # 1) Consulta catálogo unificado (fonte primária)
+    catalog_traits = _traits_from_catalog(normalized)
+    if catalog_traits is not None:
+        return catalog_traits
 
     family = normalized.split(".", 1)[0]
     abstract = normalized.endswith(".*") or "." not in normalized
 
     if family == "search":
+        # Resolução via catálogo: se concreto, busca executor real
+        inline_executor = ""
+        if not abstract:
+            from .catalog import get_catalog
+
+            desc = get_catalog().get(normalized)
+            if desc is not None and desc.supports_inline:
+                inline_executor = normalized
         return CapabilityTraits(
             capability_id=normalized,
             family="search",
@@ -110,7 +100,7 @@ def describe_capability_id(capability_id: str) -> CapabilityTraits:
             effect="read",
             freshness="current",
             abstract=abstract,
-            inline_lookup_executor_id="search.public_web",
+            inline_lookup_executor_id=inline_executor,
         )
     if family == "connector":
         return CapabilityTraits(
@@ -206,7 +196,14 @@ def summarize_capability_ids(capability_ids: Sequence[str]) -> CapabilitySummary
             inline_lookup_executor_ids.append(executor_id)
 
     if not inline_lookup_executor_ids and has_abstract_remote_family and not requires_full_pipeline:
-        inline_lookup_executor_ids.append("search.public_web")
+        # Consulta catálogo para capabilities inline de busca
+        from .catalog import get_catalog
+
+        catalog = get_catalog()
+        for desc in catalog.list_by_family("search"):
+            if desc.supports_inline and desc.fqn and not desc.internal:
+                inline_lookup_executor_ids.append(desc.capability_id)
+                break
 
     return CapabilitySummary(
         items=tuple(items),

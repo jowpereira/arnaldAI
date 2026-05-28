@@ -10,6 +10,7 @@ Cobertura:
 * Matching — vector search, expansion, intent routing
 * CognitiveGraph — add/remove, índices, ativação, persistência round-trip
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -120,9 +121,7 @@ class TestSourceRecord:
 
     def test_invalid_confidence_raises(self) -> None:
         with pytest.raises(ValueError):
-            SourceRecord(
-                kind=SourceKind.BOOTSTRAP, identifier="x", confidence=1.5
-            )
+            SourceRecord(kind=SourceKind.BOOTSTRAP, identifier="x", confidence=1.5)
 
     def test_empty_identifier_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -175,9 +174,7 @@ class TestMemoryNode:
 
 class TestSynapseNode:
     def test_specialist_factory(self) -> None:
-        s = SynapseNode.specialist(
-            "Framer", role="framer", objective="enquadrar intenção"
-        )
+        s = SynapseNode.specialist("Framer", role="framer", objective="enquadrar intenção")
         assert s.role == "framer"
         assert s.kind == NodeKind.SYNAPSE
         assert "send.external_message" in s.payload["forbidden_capabilities"]
@@ -312,16 +309,16 @@ class TestDecayPolicy:
         f = p.decay_factor("episodic", hl)
         assert 0.45 < f < 0.55
 
-    def test_unknown_domain_uses_fallback(self) -> None:
+    def test_unknown_domain_uses_default(self) -> None:
         p = DecayPolicy()
         f = p.decay_factor("dominio_inexistente", timedelta(days=1))
-        # fallback é 60d → 1d quase nada decai
+        # default é 60d → 1d quase nada decai
         assert f > 0.9
 
     def test_different_domains_decay_differently(self) -> None:
         p = DecayPolicy()
         t = timedelta(days=7)
-        f_news = p.decay_factor("tech_news", t)        # half_life=3d
+        f_news = p.decay_factor("tech_news", t)  # half_life=3d
         f_stable = p.decay_factor("semantic_stable", t)  # half_life=180d
         assert f_news < f_stable  # news decai mais rápido
 
@@ -343,11 +340,7 @@ class TestPlasticityEngine:
             kind=NodeKind.MEMORY,
             label="muito antigo",
             weight=0.5,
-            bitemp=BiTemporal(
-                window=ValidityWindow.open_at(
-                    utc_now() - timedelta(days=10_000)
-                )
-            ),
+            bitemp=BiTemporal(window=ValidityWindow.open_at(utc_now() - timedelta(days=10_000))),
             domain="tech_news",  # half-life=3d → 10k dias = decay total
         )
         status = eng.classify_status(ancient)
@@ -415,15 +408,13 @@ class TestHybridMatcher:
 
     def test_match_without_embedding_uses_plasticity(self) -> None:
         cog = self._build_graph_with_embeddings()
-        results = cog.match()  # sem embedding → fallback puramente sináptico
+        results = cog.match()  # sem embedding → puramente sináptico
         assert len(results) > 0
 
     def test_match_filters_by_kind(self) -> None:
         cog = self._build_graph_with_embeddings()
         # Adiciona synapse
-        cog.add_node(
-            SynapseNode.specialist("S", role="s", objective="o")
-        )
+        cog.add_node(SynapseNode.specialist("S", role="s", objective="o"))
         results = cog.match(node_kinds=[NodeKind.MEMORY])
         for r in results:
             assert r.node.kind == NodeKind.MEMORY
@@ -464,12 +455,8 @@ class TestCognitiveGraphIntegration:
         cog.add_node(m1)
         cog.add_node(m2)
         cog.add_edge(GraphEdge.connect(m1.id, m2.id, EdgeKind.TEMPORAL_BEFORE))
-        neighbors_temporal = list(
-            cog.neighbors(m1.id, kinds=[EdgeKind.TEMPORAL_BEFORE])
-        )
-        neighbors_causal = list(
-            cog.neighbors(m1.id, kinds=[EdgeKind.CAUSAL])
-        )
+        neighbors_temporal = list(cog.neighbors(m1.id, kinds=[EdgeKind.TEMPORAL_BEFORE]))
+        neighbors_causal = list(cog.neighbors(m1.id, kinds=[EdgeKind.CAUSAL]))
         assert len(neighbors_temporal) == 1
         assert len(neighbors_causal) == 0
 
@@ -538,11 +525,7 @@ class TestCognitiveGraphIntegration:
             label="old news",
             weight=0.3,
             domain="tech_news",
-            bitemp=BiTemporal(
-                window=ValidityWindow.open_at(
-                    utc_now() - timedelta(days=10_000)
-                )
-            ),
+            bitemp=BiTemporal(window=ValidityWindow.open_at(utc_now() - timedelta(days=10_000))),
         )
         cog.add_node(ancient)
         counters = cog.sweep_decay()

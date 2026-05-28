@@ -43,12 +43,12 @@ def print_run_result(result: Any, compact: bool = False) -> None:
         % (summary["planned_steps"], summary["executed_steps"])
     )
     print(
-        "Evidencias    : %d total | recusas=%d | erros=%d | fallback=%d"
+        "Evidencias    : %d total | recusas=%d | erros=%d | degraded=%d"
         % (
             summary["evidence_total"],
             summary["refusal_count"],
             summary["error_count"],
-            summary["fallback_count"],
+            summary["degraded_count"],
         )
     )
     print(
@@ -115,7 +115,7 @@ def print_runtime_error(exc: Exception) -> None:
     else:
         compact_body = ""
     print("=" * 72)
-    print("ERRO DE EXECUCAO (modo real, sem fallback)")
+    print("ERRO DE EXECUCAO (modo real, strict)")
     print("=" * 72)
     print(f"Tipo          : {exc.__class__.__name__}")
     print(f"Mensagem      : {message}")
@@ -155,7 +155,7 @@ def build_run_summary(result: Any) -> dict[str, Any]:
         "evidence_total": len(evidence),
         "refusal_count": as_int(evidence_by_type.get("llm_refusal")),
         "error_count": as_int(evidence_by_type.get("step_failed")),
-        "fallback_count": as_int(evidence_by_type.get("step_fallback")),
+        "degraded_count": as_int(evidence_by_type.get("step_degraded")),
         "capabilities_available": len(capability_resolution.get("available", []) or []),
         "capabilities_missing": len(capability_resolution.get("missing", []) or []),
         "capabilities_degraded": len(capability_resolution.get("degraded", []) or []),

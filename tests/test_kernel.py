@@ -3,7 +3,8 @@ import json
 import tempfile
 import unittest
 
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.graph import CognitiveGraph, NodeKind
 from arnaldo.kernel import ArnaldoKernel
 from arnaldo.memory import MemoryStore
@@ -23,7 +24,7 @@ class KernelTest(unittest.TestCase):
                 memory=MemoryStore(base / "memory"),
                 session_manager=SessionManager(base / "sessions"),
                 tool_forge=ToolForge(base / "tool_forge"),
-                capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
+                capabilities=CapabilityCatalog(registry_path=base / "capability_registry.json"),
                 sandbox_manager=SandboxManager(base / "sandboxes"),
             )
             kernel.intent_compiler._llm_client = llm  # type: ignore[attr-defined]

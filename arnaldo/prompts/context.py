@@ -128,7 +128,7 @@ def _extract_step_content(step: Dict[str, Any]) -> str:
     summary = step.get("summary")
     if isinstance(summary, str) and summary.strip():
         return summary.strip()
-    # Fallback: output, mas rejeita nomes de deliverable conhecidos
+    # Default: output, mas rejeita nomes de deliverable conhecidos
     output = step.get("output", "")
     if isinstance(output, dict):
         return str(output.get("summary", output.get("content", str(output))))

@@ -391,7 +391,7 @@ class TestDecisionToComplexityExternalData:
         )
         complexity = decision_to_complexity(decision)
         assert complexity.skip_full_pipeline is True
-        assert complexity.execution_profile == "inline_capability"
+        assert complexity.execution_profile == "live_lookup"
 
     def test_gap_without_lookup_capability_uses_full_pipeline(self) -> None:
         from arnaldo.kernel.helpers import decision_to_complexity
@@ -405,7 +405,7 @@ class TestDecisionToComplexityExternalData:
         )
         complexity = decision_to_complexity(decision)
         assert complexity.skip_full_pipeline is False
-        assert complexity.execution_profile == "full_pipeline"
+        assert complexity.execution_profile == "structured_multistep"
 
     def test_skip_preserved_when_no_external_data(self) -> None:
         from arnaldo.kernel.helpers import decision_to_complexity
@@ -419,7 +419,7 @@ class TestDecisionToComplexityExternalData:
         )
         complexity = decision_to_complexity(decision)
         assert complexity.skip_full_pipeline is True
-        assert complexity.execution_profile == "medium_response"
+        assert complexity.execution_profile == "retrieval_augmented"
 
 
 # ── GAP 2: GapType detection ─────────────────────────────────────────

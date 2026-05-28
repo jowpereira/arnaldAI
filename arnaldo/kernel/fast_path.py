@@ -114,7 +114,7 @@ def medium_response(
     graph = memory.load_graph()
     history = session.message_history if session.message_history else []
 
-    # 1) Retrieval — agora com TF-IDF fallback real
+    # 1) Retrieval — agora com TF-IDF real
     retrieval = retrieve_for_request(graph, request)
 
     # 2) Routing — seleciona synapses relevantes (código que era dead)
@@ -205,6 +205,7 @@ def inline_capability_response(
     llm_client: Any,
     capability_ids: list[str],
     suggested_tier: str = "expert",
+    strict_on_llm_failure: bool = False,
 ) -> RunResult:
     """Resposta curta com capabilities read-only executadas inline."""
     session = _session.open_session(sessions, session_id, autonomy, terms_accepted)
@@ -251,6 +252,7 @@ def inline_capability_response(
         messages=messages,
         suggested_tier=suggested_tier,
         inline_payloads=inline_payloads,
+        strict_on_llm_failure=strict_on_llm_failure,
     )
 
     mem_ids = [m.get("id", "") for m in retrieval.relevant_memories if m.get("id")]
@@ -399,7 +401,9 @@ def _collect_inline_capability_results(
     context_blocks: list[str] = []
     seen: set[str] = set()
     summary = summarize_capability_ids(capability_ids)
-    executable_ids = list(summary.inline_lookup_executor_ids) or _dedupe_capability_ids(capability_ids)
+    executable_ids = list(summary.inline_lookup_executor_ids) or _dedupe_capability_ids(
+        capability_ids
+    )
     for capability_id in executable_ids:
         normalized = str(capability_id).strip().lower()
         if not normalized or normalized in seen:
@@ -435,17 +439,16 @@ def _inline_response_text(
     messages: list[dict[str, str]],
     suggested_tier: str,
     inline_payloads: list[dict[str, Any]],
+    strict_on_llm_failure: bool = False,
 ) -> str:
     tier = suggested_tier if suggested_tier in {"fast", "expert", "god", "codex"} else "expert"
-    has_local_payload = _has_local_inline_payload(inline_payloads)
-    has_search_payload = any(
-        str(item.get("capability_id", "")).strip().lower() == "search.public_web"
-        for item in inline_payloads
-    )
-    fallback_text = _inline_fallback_response(request=request, inline_payloads=inline_payloads)
     has_successful_payload = any(bool(item.get("success")) for item in inline_payloads)
-    if has_local_payload or has_search_payload or not has_successful_payload:
-        return fallback_text
+
+    # Sem dados coletados, LLM não tem o que sintetizar — retorna erro direto
+    if not has_successful_payload:
+        return "Nao consegui confirmar dados atuais na web agora."
+
+    # Tenta síntese via LLM
     if llm_client and getattr(llm_client, "is_configured", False):
         try:
             resp = llm_client.chat(tier=tier, messages=messages, timeout=45.0)
@@ -454,7 +457,22 @@ def _inline_response_text(
                 return content
         except Exception as exc:
             logger.warning("inline capability synthesis falhou: %s", exc)
-    return fallback_text
+
+    # LLM falhou — decisão via política do profile
+    if strict_on_llm_failure:
+        if has_successful_payload:
+            return (
+                "Erro: síntese LLM indisponível. "
+                "Dados coletados mas o perfil exige processamento LLM."
+            )
+        return "Erro: síntese LLM indisponível e nenhum dado foi coletado."
+
+    # Profile permite resposta sem LLM — usa dados brutos formatados
+    if has_successful_payload:
+        return _inline_raw_data_response(request=request, inline_payloads=inline_payloads)
+
+    # Nenhum payload e LLM falhou
+    return "Nenhum dado disponível para esta consulta."
 
 
 def _build_inline_capability_params(
@@ -494,28 +512,32 @@ def _format_inline_capability_context(payload: dict[str, Any]) -> str:
     return formatter(payload)
 
 
-def _inline_fallback_response(
+def _inline_raw_data_response(
     *,
     request: str,
     inline_payloads: list[dict[str, Any]],
 ) -> str:
+    """Formata dados brutos de capabilities quando LLM não está disponível."""
     if not inline_payloads:
-        return "Nao consegui executar nenhuma capability read-only para responder agora."
-    fallbacks = {
-        "search.public_web": _fallback_search_public_web,
-        "filesystem.local.search": _fallback_filesystem_local_search,
-        "shell.local.readonly": _fallback_shell_local,
+        return "Nenhum dado disponível para esta consulta."
+    formatters = {
+        "search.public_web": _format_raw_search_public_web,
+        "filesystem.local.search": _format_raw_filesystem_local_search,
+        "shell.local.readonly": _format_raw_shell_local,
     }
     for payload in inline_payloads:
+        if not payload.get("success"):
+            continue
         capability_id = str(payload.get("capability_id", "")).strip().lower()
-        fallback = fallbacks.get(capability_id, _generic_inline_fallback)
-        text = fallback(payload)
+        formatter = formatters.get(capability_id, _format_raw_generic_inline)
+        text = formatter(payload)
         if text:
             return text
-    return (
-        "Nao consegui montar uma resposta com execucao inline de capability agora. "
-        f"Pedido original: {request}"
-    )
+    # Nenhum payload com sucesso
+    errors = [str(p.get("error", "desconhecido")) for p in inline_payloads if not p.get("success")]
+    if errors:
+        return f"Erro na execução: {'; '.join(errors)}"
+    return f"Sem dados para: {request}"
 
 
 def _format_search_public_web_context(payload: dict[str, Any]) -> str:
@@ -612,7 +634,7 @@ def _format_shell_local_context(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _fallback_search_public_web(payload: dict[str, Any]) -> str:
+def _format_raw_search_public_web(payload: dict[str, Any]) -> str:
     if not payload.get("success"):
         error = str(payload.get("error", "")).strip() or "falha_desconhecida"
         return "Nao consegui confirmar dados atuais na web agora. Motivo: %s." % error
@@ -686,8 +708,7 @@ def _is_generic_web_search_followup(request_text: str) -> bool:
     content_tokens = [
         token
         for token in tokens
-        if token not in ignored_tokens
-        and not any(marker in token for marker in search_markers)
+        if token not in ignored_tokens and not any(marker in token for marker in search_markers)
     ]
     return len(content_tokens) <= 1
 
@@ -705,7 +726,7 @@ def _last_substantive_user_message(message_history: list[dict[str, Any]]) -> str
     return ""
 
 
-def _fallback_filesystem_local_search(payload: dict[str, Any]) -> str:
+def _format_raw_filesystem_local_search(payload: dict[str, Any]) -> str:
     if not payload.get("success"):
         error = str(payload.get("error", "")).strip() or "falha_desconhecida"
         return "Nao consegui listar ou localizar arquivos locais agora. Motivo: %s." % error
@@ -727,7 +748,7 @@ def _fallback_filesystem_local_search(payload: dict[str, Any]) -> str:
     return "Encontrei resultados locais, mas sem conteúdo textual suficiente para resumir."
 
 
-def _fallback_shell_local(payload: dict[str, Any]) -> str:
+def _format_raw_shell_local(payload: dict[str, Any]) -> str:
     if not payload.get("success"):
         error = str(payload.get("error", "")).strip() or "falha_desconhecida"
         return "Nao consegui executar o comando local read-only agora. Motivo: %s." % error
@@ -747,11 +768,14 @@ def _fallback_shell_local(payload: dict[str, Any]) -> str:
             return "Executei o comando local read-only `%s` e obtive:\n\n%s" % (command, stdout)
         return "Executei o comando local read-only e obtive:\n\n%s" % stdout
     if command:
-        return "Executei o comando local read-only `%s`, mas ele não retornou saída relevante." % command
+        return (
+            "Executei o comando local read-only `%s`, mas ele não retornou saída relevante."
+            % command
+        )
     return "Executei o comando local read-only, mas ele não retornou saída relevante."
 
 
-def _generic_inline_fallback(payload: dict[str, Any]) -> str:
+def _format_raw_generic_inline(payload: dict[str, Any]) -> str:
     capability_id = str(payload.get("capability_id", "")).strip()
     if not capability_id:
         return ""

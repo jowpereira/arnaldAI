@@ -1101,7 +1101,7 @@ Observações:
   - adiciona etapas de `design_tooling` (gaps ausentes) e `stabilize_tooling` (capabilities degradadas);
   - materializa `CapabilityNode` para capabilities observadas;
   - promove maturidade de `CapabilityNode` (`draft -> tested -> trusted`) após execução bem-sucedida de etapas de tooling;
-  - sincroniza capabilities dinâmicas do grafo de execução para o `CapabilityRegistry` (ciclo entre runs);
+  - sincroniza capabilities dinâmicas do grafo de execução para o `CapabilityCatalog` (ciclo entre runs);
   - registra `MemoryNode` por step executado (knowledge trail);
   - persiste `execution-graph.msgpack` e reutiliza na sessão seguinte.
 

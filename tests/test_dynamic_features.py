@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
+from arnaldo.capabilities.catalog import CapabilityCatalog
 from arnaldo.components import (
-    CapabilityRegistry,
     CognitiveControlPlane,
     IntentCompiler,
     OrganizationGenerator,
@@ -32,7 +32,7 @@ class DynamicFeatureTest(unittest.TestCase):
             memory=MemoryStore(base / "memory"),
             session_manager=SessionManager(base / "sessions"),
             tool_forge=ToolForge(base / "tool_forge"),
-            capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
+            capabilities=CapabilityCatalog(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
         )
         kernel.intent_compiler._llm_client = llm  # type: ignore[attr-defined]
@@ -81,8 +81,8 @@ class DynamicFeatureTest(unittest.TestCase):
     def test_capability_registry_marks_optional_missing_as_degraded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            registry = CapabilityRegistry(registry_path=base / "capability_registry.json")
-            resolution = registry.resolve(
+            catalog = CapabilityCatalog(registry_path=base / "capability_registry.json")
+            resolution = catalog.resolve(
                 [
                     {"id": "connector.github", "required": False},
                 ]
@@ -466,9 +466,7 @@ class DynamicFeatureTest(unittest.TestCase):
                 capability_id="connector.runtime",
             )
         )
-        exec_result = SimpleNamespace(
-            success=True, fallback_used=False, output={"status": "executed"}
-        )
+        exec_result = SimpleNamespace(success=True, degraded=False, output={"status": "executed"})
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
             graph=graph,
@@ -532,7 +530,7 @@ class DynamicFeatureTest(unittest.TestCase):
             )
         )
         exec_result = SimpleNamespace(
-            success=True, fallback_used=False, output={"status": "not_implemented"}
+            success=True, degraded=False, output={"status": "not_implemented"}
         )
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
@@ -570,9 +568,7 @@ class DynamicFeatureTest(unittest.TestCase):
                 capability_id="connector.runtime",
             )
         )
-        exec_result = SimpleNamespace(
-            success=False, fallback_used=False, output={"status": "error"}
-        )
+        exec_result = SimpleNamespace(success=False, degraded=False, output={"status": "error"})
 
         runtime._evolve_capability_nodes(  # pylint: disable=protected-access
             graph=graph,

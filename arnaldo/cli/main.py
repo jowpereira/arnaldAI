@@ -99,7 +99,7 @@ def run_chat_loop(
     stream_events: bool = False,
 ) -> None:
     print("=" * 72)
-    print("ARNALDO CHAT (modo real, sem fallback)")
+    print("ARNALDO CHAT (modo real, strict)")
     print("- runtime: graph")
     print("- llm: obrigatoria")
     print("- saidas: resposta direta no terminal")

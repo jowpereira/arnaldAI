@@ -119,7 +119,7 @@ class HybridMatcher:
         effective_intent = intent or (classify_intent(query) if query else "default")
         edge_kinds = INTENT_TO_EDGES.get(effective_intent, INTENT_TO_EDGES["default"])
 
-        # 2) Vector search — entry nodes (com fallback TF-IDF)
+        # 2) Vector search — entry nodes (com TF-IDF alternativo)
         entries = self._find_entry_nodes(graph, query_embedding, query=query)
 
         # 3) Graph expansion — coleta candidatos
@@ -148,10 +148,10 @@ class HybridMatcher:
     ) -> list[tuple[GraphNode, float]]:
         """Top-K nós por similaridade com a query.
 
-        Prioridade: embedding > TF-IDF > peso efetivo (fallback).
+        Prioridade: embedding > TF-IDF > peso efetivo (default).
         """
         if query_embedding is None:
-            # TF-IDF fallback quando há texto de query
+            # TF-IDF alternativo quando há texto de query
             if query:
                 return self._find_by_tfidf(graph, query)
             ranked = [
@@ -178,7 +178,7 @@ class HybridMatcher:
         graph: CognitiveGraph,
         query: str,
     ) -> list[tuple[GraphNode, float]]:
-        """Fallback TF-IDF quando não há embeddings."""
+        """TF-IDF alternativo quando não há embeddings."""
         from .text_similarity import node_searchable_text, tfidf_rank
 
         nodes_by_id: dict[str, GraphNode] = {}

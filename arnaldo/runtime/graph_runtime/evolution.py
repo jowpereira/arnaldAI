@@ -86,7 +86,7 @@ def _evolve_capability_nodes(
     if action not in {"design_tooling", "stabilize_tooling", "execute_tooling"}:
         return
     if action in {"design_tooling", "stabilize_tooling"} and (
-        not bool(exec_result.success) or bool(exec_result.fallback_used)
+        not bool(exec_result.success) or bool(exec_result.degraded)
     ):
         return
     capability_id = str(step_item.get("capability_id", "")).strip()
@@ -99,7 +99,7 @@ def _evolve_capability_nodes(
     base_node = capability_node
     if action == "execute_tooling":
         status = _tool_execution_status(exec_result.output)
-        if not bool(exec_result.success) or bool(exec_result.fallback_used):
+        if not bool(exec_result.success) or bool(exec_result.degraded):
             degraded = _degrade_capability_after_tool_execution(
                 capability_node,
                 status or "failed",
@@ -160,7 +160,7 @@ def _tool_execution_is_real(output: Any) -> bool:
     status = str(output.get("status", "")).strip().lower()
     if not status:
         return False
-    if status in {"not_implemented", "fallback", "failed", "error"}:
+    if status in {"not_implemented", "degraded", "failed", "error"}:
         return False
     return True
 

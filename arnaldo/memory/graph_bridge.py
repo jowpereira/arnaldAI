@@ -41,7 +41,7 @@ def ingest_record_to_graph(
         payload=node.payload,
         association_window=association_window,
     )
-    target_sig = association_signature(node.payload, fallback=node.id)
+    target_sig = association_signature(node.payload, default=node.id)
     for source_id, reward in related:
         source_node = graph.get_node(source_id)
         source_payload = (
@@ -49,7 +49,7 @@ def ingest_record_to_graph(
             if isinstance(source_node, MemoryNode) and isinstance(source_node.payload, dict)
             else {}
         )
-        source_sig = association_signature(source_payload, fallback=source_id)
+        source_sig = association_signature(source_payload, default=source_id)
         candidate = upsert_candidate(
             candidates,
             source_id=source_id,

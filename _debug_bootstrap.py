@@ -6,7 +6,8 @@ from arnaldo.kernel import ArnaldoKernel
 from arnaldo.runtime import GraphRuntime, SandboxManager
 from arnaldo.memory import MemoryStore
 from arnaldo.session import SessionManager
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.proactivity import ProactivityManager
 from arnaldo.graph import CognitiveGraph, EdgeKind, NodeKind, MemoryNode
 
@@ -20,7 +21,7 @@ with tempfile.TemporaryDirectory() as tmp:
         memory=MemoryStore(base / "memory"),
         session_manager=SessionManager(base / "sessions"),
         tool_forge=ToolForge(base / "tool_forge"),
-        capabilities=CapabilityRegistry(registry_path=base / "cap.json"),
+        capabilities=CapabilityCatalog(registry_path=base / "cap.json"),
         sandbox_manager=SandboxManager(base / "sb"),
         proactivity=ProactivityManager(base / "proact"),
     )
@@ -49,7 +50,7 @@ with tempfile.TemporaryDirectory() as tmp:
         memory=MemoryStore(base / "memory"),
         session_manager=SessionManager(base / "sessions"),
         tool_forge=ToolForge(base / "tool_forge"),
-        capabilities=CapabilityRegistry(registry_path=base / "cap.json"),
+        capabilities=CapabilityCatalog(registry_path=base / "cap.json"),
         sandbox_manager=SandboxManager(base / "sb"),
         proactivity=ProactivityManager(base / "proact"),
     )

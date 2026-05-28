@@ -40,7 +40,12 @@ def decision_to_complexity(decision: BrainDecision) -> RequestComplexity:
         decision.complexity,
         f"brain_activated:{decision.primary_synapse or 'none'}",
         skip_full_pipeline=profile.skip_full_pipeline,
-        use_retrieval=decision.complexity != "conversational" or profile.name == "inline_capability",
+        use_retrieval=decision.complexity != "conversational"
+        or profile.name
+        in (
+            "live_lookup",
+            "tool_execution_local",
+        ),
         suggested_tier=decision.tier,
         needs_external_data=decision.needs_external_data,
         capability_needs=decision.capability_needs,
@@ -50,19 +55,21 @@ def decision_to_complexity(decision: BrainDecision) -> RequestComplexity:
 
 
 def pop_due_proactive_messages(
-    proactivity: ProactivityManager, session_id: str, *, limit: int = 3,
+    proactivity: ProactivityManager,
+    session_id: str,
+    *,
+    limit: int = 3,
 ) -> list[str]:
     """Return due proactive messages for the given session."""
     due = proactivity.pop_due(session_id=session_id, limit=limit)
     return [
-        str(item.get("message", "")).strip()
-        for item in due
-        if str(item.get("message", "")).strip()
+        str(item.get("message", "")).strip() for item in due if str(item.get("message", "")).strip()
     ]
 
 
 def pending_proactive_count(
-    proactivity: ProactivityManager, session_id: str,
+    proactivity: ProactivityManager,
+    session_id: str,
 ) -> int:
     """Return count of pending proactive items for the session."""
     return proactivity.pending_count(session_id=session_id)

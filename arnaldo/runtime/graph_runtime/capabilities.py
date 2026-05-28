@@ -30,7 +30,6 @@ def _infer_capability_id_from_output(
     return tooling_id_by_slug.get(slug, "")
 
 
-
 def _collect_tooling_targets(capability_resolution: Dict[str, Any]) -> Dict[str, list[str]]:
     missing: set[str] = set()
     degraded: set[str] = set()
@@ -51,19 +50,24 @@ def _collect_tooling_targets(capability_resolution: Dict[str, Any]) -> Dict[str,
 def _collect_tool_execution_targets(
     capability_resolution: Dict[str, Any],
 ) -> list[Dict[str, str]]:
-    from arnaldo.capabilities.registry import _BUILTIN_CAPABILITIES
+    from arnaldo.capabilities.catalog import get_catalog
 
+    catalog = get_catalog()
     targets: dict[str, str] = {}
     for bucket in ("available", "degraded", "missing"):
         for item in capability_resolution.get(bucket, []) or []:
             capability_id = str(item.get("id", "")).strip()
             if not capability_id.startswith(_TOOLING_PREFIXES):
                 continue
-            module_path = _capability_module_path(item)
-            # Builtins não precisam de module_path explícito
-            if not module_path and capability_id not in _BUILTIN_CAPABILITIES:
+            if catalog.is_builtin(capability_id):
                 continue
-            targets[capability_id] = module_path or _BUILTIN_CAPABILITIES.get(capability_id, "")
+            module_path = _capability_module_path(item)
+            if not module_path:
+                desc = catalog.get(capability_id)
+                if desc is None or not desc.fqn or desc.internal:
+                    continue
+                module_path = desc.fqn
+            targets[capability_id] = module_path
     return [
         {"id": capability_id, "module_path": targets[capability_id]}
         for capability_id in sorted(targets.keys())

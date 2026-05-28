@@ -1,8 +1,8 @@
 """IntentCompiler — compilação de intenção com saída validada por LLM.
 
 Estratégia:
-- Em modo estrito (default), exige LLM configurado e falha sem fallback.
-- Em modo não estrito (uso de teste), preserva fallback heurístico local.
+- Em modo estrito (default), exige LLM configurado e falha explicitamente.
+- Em modo não estrito (uso de teste), usa heurística local.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class IntentEnrichment:
 class IntentCompiler:
     """Converts a human request into a generic declarative contract.
 
-    `strict_real=True` por padrão para manter comportamento real sem fallback
+    `strict_real=True` por padrão para manter comportamento real strict
     no fluxo principal. Testes podem injetar `strict_real=False`.
     """
 
@@ -80,7 +80,7 @@ class IntentCompiler:
         if not text:
             raise ValueError("Informe uma intencao para o Arnaldo executar.")
 
-        # === Camada heurística (sempre roda, é o fallback garantido) ===
+        # === Camada heurística (sempre roda, piso garantido) ===
         signals = infer_signals(text)
         desired_state = derive_desired_state(text)
         requirements = infer_requirements(signals)
@@ -90,7 +90,7 @@ class IntentCompiler:
         # === Camada LLM (opcional, enriquece se disponível) ===
         if self._strict_real and not self.llm_enabled:
             raise RuntimeError(
-                "strict_real habilitado: LLM indisponível no IntentCompiler (sem fallback heurístico)."
+                "strict_real habilitado: LLM indisponível no IntentCompiler (modo strict)."
             )
         if self.llm_enabled:
             enrichment = self._enrich_with_llm(text)
@@ -173,7 +173,7 @@ class IntentCompiler:
         except (LLMError, RuntimeError, ValueError, TypeError) as exc:
             if self._strict_real:
                 raise
-            logger.warning("IntentCompiler LLM fallback: %s", exc)
+            logger.warning("IntentCompiler LLM degraded: %s", exc)
             return None
 
         if result.refusal is not None:

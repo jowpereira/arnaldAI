@@ -23,15 +23,15 @@ def _format_exception_detail(exc: Exception) -> str:
     return f"{message} | body={compact_body}"
 
 
-def _resolve_payload_positive_int(value: Any, *, fallback: int | None = None) -> int | None:
+def _resolve_payload_positive_int(value: Any, *, default: int | None = None) -> int | None:
     if value is None:
-        return fallback
+        return default
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return fallback
+        return default
     if parsed <= 0:
-        return fallback
+        return default
     return parsed
 
 
@@ -47,13 +47,13 @@ def _resolve_payload_positive_float(value: Any) -> float | None:
     return parsed
 
 
-def _resolve_payload_float(value: Any, *, fallback: float) -> float:
+def _resolve_payload_float(value: Any, *, default: float) -> float:
     if value is None:
-        return fallback
+        return default
     try:
         return float(value)
     except (TypeError, ValueError):
-        return fallback
+        return default
 
 
 def _resolve_payload_str(value: Any) -> str:
@@ -137,11 +137,11 @@ def _build_chat_kwargs(
 ) -> dict[str, Any]:
     step_max_retries = _resolve_payload_positive_int(
         node.payload.get("max_retries"),
-        fallback=max_retries,
+        default=max_retries,
     )
     step_temperature = _resolve_payload_float(
         node.payload.get("temperature"),
-        fallback=temperature,
+        default=temperature,
     )
     chat_kwargs: dict[str, Any] = {
         "max_retries": step_max_retries,
@@ -149,7 +149,7 @@ def _build_chat_kwargs(
     }
     step_retry_attempts = _resolve_payload_positive_int(
         node.payload.get("retry_attempts"),
-        fallback=1,
+        default=1,
     )
     if step_retry_attempts is not None:
         chat_kwargs["retry_attempts"] = step_retry_attempts
@@ -220,7 +220,7 @@ def _build_messages(
     ]
 
 
-def _fallback_result(
+def _degraded_result(
     *,
     node: SynapseNode,
     tier: str,
@@ -229,7 +229,7 @@ def _fallback_result(
     request: str,
 ) -> SynapseExecutionResult:
     payload = {
-        "status": "fallback",
+        "status": "degraded",
         "reason": reason,
         "role": node.payload.get("role", "generic"),
         "objective": node.payload.get("objective", ""),
@@ -241,12 +241,12 @@ def _fallback_result(
         action=str(node.payload.get("action", "")),
         agent_id=str(node.payload.get("agent_id", "")),
         capability_id=str(node.payload.get("capability_id", "")),
-        channel="fallback",
+        channel="degraded",
     )
     return SynapseExecutionResult(
         node_id=node.id,
         tier=tier,
         success=False,
         output=payload,
-        fallback_used=True,
+        degraded=True,
     )

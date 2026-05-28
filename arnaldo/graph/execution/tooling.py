@@ -150,7 +150,7 @@ def _execute_tooling_synapse(
         if real_result is not None:
             return real_result
 
-    # ── Fallback: módulo dinâmico (ToolForge scaffold) ──
+    # ── Default: módulo dinâmico (ToolForge scaffold) ──
     module_path_raw = str(node.payload.get("module_path", "")).strip()
     if not module_path_raw:
         if engine.strict_real:

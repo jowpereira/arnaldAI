@@ -109,7 +109,7 @@ def build_graph_native_agents(
             str(item.get("id", "")).strip()
             for bucket in ("missing", "degraded")
             for item in (capability_resolution.get(bucket, []) or [])
-            if str(item.get("id", "")).strip().startswith(("connector.", "tool.", "search."))
+            if str(item.get("id", "")).strip().startswith(("connector.", "tool."))
         }
     )
     for capability_id in tooling_capabilities:
@@ -129,7 +129,7 @@ def build_graph_native_agents(
             str(item.get("id", "")).strip()
             for bucket in ("available", "degraded", "missing")
             for item in (capability_resolution.get(bucket, []) or [])
-            if str(item.get("id", "")).strip().startswith(("connector.", "tool.", "search."))
+            if str(item.get("id", "")).strip().startswith(("connector.", "tool."))
             and _capability_module_path(item)
         }
     )
@@ -150,7 +150,7 @@ def build_graph_native_agents(
             str(item.get("id", "")).strip()
             for bucket in ("available", "degraded", "missing")
             for item in (capability_resolution.get(bucket, []) or [])
-            if str(item.get("id", "")).strip().startswith(("connector.", "tool.", "search."))
+            if str(item.get("id", "")).strip().startswith(("connector.", "tool."))
         }
     )
     if len(workflow_composer_targets) >= 2 and not _has_graph_agent(agents, "workflow_composer"):

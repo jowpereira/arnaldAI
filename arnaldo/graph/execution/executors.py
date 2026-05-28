@@ -137,7 +137,7 @@ def execute_activates_parallel(
                 level_results = [future_by_node[nid].result() for nid in level]
 
         _plasticity._record_level_transition_outcomes(engine, previous_level, level_results)
-        successful = [r.node_id for r in level_results if r.success and not r.fallback_used]
+        successful = [r.node_id for r in level_results if r.success and not r.degraded]
         _plasticity._record_collaboration_edges(engine, successful, success=True)
         results.extend(level_results)
         success_outputs = [r.output for r in level_results if r.success and r.output is not None]

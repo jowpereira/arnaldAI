@@ -59,7 +59,6 @@ arnaldo/
 ├── kernel.py                ← Kernel principal (pipeline compile→match→execute)
 ├── components/
 │   ├── adaptive_planner.py  ← Planejador adaptativo
-│   ├── capability_registry.py ← Registro de capabilities
 │   ├── cognitive_control.py ← Plano cognitivo (CognitiveControlPlane)
 │   ├── intent_compiler.py   ← Compilador de intenção (LLM + heurística)
 │   ├── organization_generator.py ← Gerador de organização

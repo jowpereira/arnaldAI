@@ -26,10 +26,10 @@ def _read_response_text(result: Any) -> str:
 
     run_dir = getattr(result, "run_dir", None)
     if isinstance(run_dir, Path):
-        fallback_path = run_dir / "response.md"
-        if fallback_path.exists():
+        response_path = run_dir / "response.md"
+        if response_path.exists():
             try:
-                text = fallback_path.read_text(encoding="utf-8").strip()
+                text = response_path.read_text(encoding="utf-8").strip()
             except Exception:
                 text = ""
             if text:
@@ -108,7 +108,7 @@ def build_latest_step_preview(files: dict[str, Any]) -> str:
     evidence_rows = safe_read_jsonl(files.get("evidence"))
     for row in reversed(evidence_rows):
         record_type = str(row.get("record_type", "")).strip()
-        if record_type not in {"step_completed", "step_fallback", "step_failed"}:
+        if record_type not in {"step_completed", "step_degraded", "step_failed"}:
             continue
         payload = row.get("payload")
         if not isinstance(payload, dict):

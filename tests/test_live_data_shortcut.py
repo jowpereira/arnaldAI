@@ -6,10 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from arnaldo.capabilities.base import CapabilityResult, make_source
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.contracts import RunResult
 from arnaldo.graph.brain import BrainDecision
 from arnaldo.kernel import ArnaldoKernel
@@ -67,7 +68,7 @@ class InlineCapabilityRoutingTest(unittest.TestCase):
             memory=MemoryStore(base / "memory"),
             session_manager=SessionManager(base / "sessions"),
             tool_forge=ToolForge(base / "tool_forge"),
-            capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
+            capabilities=CapabilityCatalog(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
         )
         kernel.intent_compiler._llm_client = llm  # type: ignore[attr-defined]
@@ -214,7 +215,9 @@ class InlineCapabilityRoutingTest(unittest.TestCase):
 
             with (
                 patch("arnaldo.kernel.kernel.brain_activate", return_value=brain_decision),
-                patch("arnaldo.kernel.kernel.classify_request", return_value=classified) as classify_mock,
+                patch(
+                    "arnaldo.kernel.kernel.classify_request", return_value=classified
+                ) as classify_mock,
                 patch(
                     "arnaldo.kernel.kernel.inline_capability_response",
                     return_value=sentinel,
@@ -277,7 +280,7 @@ class InlineCapabilityResponseTest(unittest.TestCase):
                     suggested_tier="expert",
                 )
 
-            self.assertIn("Encontrei um resultado recente na web", result.response)
+            # LLM sintetiza — resposta é conteúdo do LLM
             self.assertIn("R$ 5,01", result.response)
             execute_mock.assert_called_once_with(
                 "search.public_web",
@@ -334,7 +337,9 @@ class InlineCapabilityResponseTest(unittest.TestCase):
             self.assertIn("Encontrei um resultado recente na web", result.response)
             self.assertIn("R$ 5,01", result.response)
 
-    def test_inline_capability_response_uses_previous_topic_for_generic_search_followup(self) -> None:
+    def test_inline_capability_response_uses_previous_topic_for_generic_search_followup(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             memory = MemoryStore(base / "memory")
@@ -427,7 +432,7 @@ class InlineCapabilityResponseTest(unittest.TestCase):
     def test_inline_capability_response_executes_local_shell_capability(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            llm = _RecordingLLM("Encontrei estes itens no workspace.")
+            llm = _RecordingLLM("Encontrei estes itens no workspace: README.md, arnaldo, tests.")
             memory = MemoryStore(base / "memory")
             sessions = SessionManager(base / "sessions")
             capability_result = CapabilityResult(
@@ -462,12 +467,13 @@ class InlineCapabilityResponseTest(unittest.TestCase):
             execute_mock.assert_called_once()
             self.assertEqual(execute_mock.call_args[0][0], "shell.local.readonly")
             self.assertEqual(execute_mock.call_args[0][1]["command"], expected_command)
+            # LLM sintetiza a resposta com dados do contexto
             self.assertIn("README.md", result.response)
             self.assertIn("arnaldo", result.response)
             payload = json.loads(result.files["inline_capabilities"].read_text(encoding="utf-8"))
             self.assertEqual(payload["capabilities"][0]["capability_id"], "shell.local.readonly")
 
-    def test_inline_capability_response_uses_fallback_when_llm_denies_local_access(self) -> None:
+    def test_inline_capability_response_uses_raw_data_when_llm_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             memory = MemoryStore(base / "memory")
@@ -480,6 +486,11 @@ class InlineCapabilityResponseTest(unittest.TestCase):
                 },
                 source=make_source("shell.local.readonly:test"),
                 metadata={},
+            )
+
+            failing_llm = SimpleNamespace(
+                is_configured=True,
+                chat=Mock(side_effect=RuntimeError("LLM unavailable")),
             )
 
             with patch(
@@ -495,11 +506,10 @@ class InlineCapabilityResponseTest(unittest.TestCase):
                     output_dir=base / "runs",
                     sessions=sessions,
                     memory=memory,
-                    llm_client=_RecordingLLM(
-                        "Não tenho acesso para rodar comando no seu dispositivo."
-                    ),
+                    llm_client=failing_llm,
                     capability_ids=["shell.local.readonly"],
                     suggested_tier="fast",
+                    strict_on_llm_failure=False,
                 )
 
             self.assertIn("Executei o comando local read-only", result.response)

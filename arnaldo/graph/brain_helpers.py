@@ -65,7 +65,7 @@ def apply_memory_modulation(
 
 
 def check_needs_external(graph: CognitiveGraph, cap_needs: list[str]) -> bool:
-    """G1: Verifica se alguma capability requer rede — via campo explícito + fallback prefix."""
+    """G1: Verifica se alguma capability requer rede — via campo explícito + prefix check."""
     cap_index = {
         node.payload.get("capability_id"): node
         for node in graph.iter_nodes(kind=NodeKind.CAPABILITY, active_only=True)

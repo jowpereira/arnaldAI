@@ -7,9 +7,9 @@ from pathlib import Path
 import re
 from typing import Any, Dict
 
+from arnaldo.capabilities.catalog import CapabilityCatalog, get_catalog
 from arnaldo.components import (
     AdaptivePlanner,
-    CapabilityRegistry,
     CognitiveControlPlane,
     IntentCompiler,
     OrganizationGenerator,
@@ -76,7 +76,7 @@ class ArnaldoKernel:
         session_manager: SessionManager | None = None,
         planner: AdaptivePlanner | None = None,
         tool_forge: ToolForge | None = None,
-        capabilities: CapabilityRegistry | None = None,
+        capabilities: CapabilityCatalog | None = None,
         sandbox_manager: SandboxManager | None = None,
         proactivity: ProactivityManager | None = None,
     ) -> None:
@@ -97,7 +97,7 @@ class ArnaldoKernel:
         self._intent_compiler: IntentCompiler | None = None
         self._task_compiler: TaskCompiler | None = None
         self._control_plane_inst: CognitiveControlPlane | None = None
-        self._capabilities_inst: CapabilityRegistry | None = None
+        self._capabilities_inst: CapabilityCatalog | None = None
         self._organizations_inst: OrganizationGenerator | None = None
         self._policy_inst: PolicyEngine | None = None
         self._planner_inst: AdaptivePlanner | None = None
@@ -138,9 +138,9 @@ class ArnaldoKernel:
         return self._control_plane_inst
 
     @property
-    def capabilities(self) -> CapabilityRegistry:
+    def capabilities(self) -> CapabilityCatalog:
         if self._capabilities_inst is None:
-            self._capabilities_inst = self._capabilities_override or CapabilityRegistry()
+            self._capabilities_inst = self._capabilities_override or get_catalog()
         return self._capabilities_inst
 
     @property
@@ -209,6 +209,7 @@ class ArnaldoKernel:
         if thinking_callback is not None:
             self.thinking.register(thinking_callback)
         from arnaldo.episteme.forager import WebForager
+
         WebForager.reset_counter()
         llm_for_classify = self._llm_client if llm_classify else None
         graph = self.memory.load_graph()
@@ -226,10 +227,13 @@ class ArnaldoKernel:
 
         with self.metrics.phase("classify"):
             decision = brain_activate(graph, request)
-            # Fallback: se grafo não tem ativação forte, usa classify_request
-            if decision.confidence < BRAIN_CONFIDENCE_THRESHOLD or _should_prefer_semantic_classification(
-                request,
-                decision,
+            # Se grafo não tem ativação forte, usa classify_request
+            if (
+                decision.confidence < BRAIN_CONFIDENCE_THRESHOLD
+                or _should_prefer_semantic_classification(
+                    request,
+                    decision,
+                )
             ):
                 complexity = classify_request(request, graph=graph, llm_client=llm_for_classify)
             else:
@@ -242,7 +246,11 @@ class ArnaldoKernel:
         if prospect is not None:
             self.memory.append(prospect)
 
-        if complexity.execution_profile == "inline_capability":
+        if complexity.execution_profile in (
+            "live_lookup",
+            "tool_execution_local",
+            "inline_capability",
+        ):
             return inline_capability_response(
                 request=request,
                 session_id=session_id,
@@ -255,6 +263,7 @@ class ArnaldoKernel:
                 llm_client=self._llm_client,
                 capability_ids=complexity.execution_capability_ids or complexity.capability_needs,
                 suggested_tier=complexity.suggested_tier,
+                strict_on_llm_failure=complexity.strict_on_llm_failure,
             )
 
         # GAP 10: Foraging epistêmico — busca externa se gap + web disponível
@@ -304,7 +313,7 @@ class ArnaldoKernel:
                         self.memory._persist_graph_state()
 
         # === FAST PATH: conversacional → single LLM call ===
-        if complexity.execution_profile == "fast_response":
+        if complexity.execution_profile in ("conversational_fast", "fast_response"):
             return fast_response(
                 request=request,
                 session_id=session_id,
@@ -318,7 +327,7 @@ class ArnaldoKernel:
             )
 
         # === MEDIUM PATH: intermediate → retrieval + routing + 1 LLM call ===
-        if complexity.execution_profile == "medium_response":
+        if complexity.execution_profile in ("retrieval_augmented", "medium_response"):
             return medium_response(
                 request=request,
                 session_id=session_id,

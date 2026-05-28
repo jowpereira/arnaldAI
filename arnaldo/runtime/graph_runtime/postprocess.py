@@ -139,13 +139,13 @@ def _record_step_evidence(
                 "error": exec_result.error,
             },
         )
-    elif exec_result.fallback_used:
+    elif exec_result.degraded:
         _evidence(
             store,
             run_id,
             task_id,
-            "step_fallback",
-            "Etapa %s executada em fallback deterministico." % item["action"],
+            "step_degraded",
+            "Etapa %s executada em modo degradado." % item["action"],
             {
                 "node_id": exec_result.node_id,
                 "step_id": item["id"],

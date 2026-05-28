@@ -105,7 +105,7 @@ class TestSelectSynapsesForRequest:
         g = CognitiveGraph()
         _make_synapse(g, "s1", weight=0.8)
         result = select_synapses_for_request(g, "como faço X?")
-        # Sem embeddings, pode retornar com fallback ou vazio
+        # Sem embeddings, pode retornar com TF-IDF ou vazio
         assert isinstance(result, list)
 
     def test_respects_max_synapses(self):

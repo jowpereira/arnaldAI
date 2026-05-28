@@ -75,7 +75,7 @@ def build_agents(
     execution_risk = str(task.risk.get("execution_risk", "low"))
     missing = capability_resolution.get("missing", []) or []
     has_tooling_gap = any(
-        item.get("id", "").startswith(("connector.", "tool.", "search.")) for item in missing
+        item.get("id", "").startswith(("connector.", "tool.")) for item in missing
     )
 
     if uncertainty_count >= 2 and not _has_agent(agents, "clarifier"):

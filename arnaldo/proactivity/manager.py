@@ -211,7 +211,7 @@ class ProactivityManager:
             )
             scheduled += 1 if created else 0
 
-        # Fallback: se nenhum trigger específico, agenda follow-up genérico
+        # Default: se nenhum trigger específico, agenda follow-up genérico
         if scheduled == 0:
             goal = task.goal if isinstance(getattr(task, "goal", None), dict) else {}
             stmt = str(goal.get("statement", "")).strip()
@@ -222,7 +222,7 @@ class ProactivityManager:
                     priority=0.40,
                     delay_seconds=45,
                     message=f"{vocative}posso aprofundar ou expandir o que acabamos de trabalhar.",
-                    metadata={"run_id": run_id, "source": "fallback_followup"},
+                    metadata={"run_id": run_id, "source": "default_followup"},
                 )
                 scheduled += 1 if created else 0
 

@@ -41,7 +41,8 @@ def test_collect_tooling_targets_ignores_unknown_prefix() -> None:
 # ── _collect_tool_execution_targets com builtins ─────────────────────
 
 
-def test_execution_targets_includes_builtins_without_module_path() -> None:
+def test_execution_targets_skips_builtins() -> None:
+    """Builtins não devem receber execute_tooling — já têm implementação nativa."""
     cap_res = {
         "available": [{"id": "filesystem.local.search"}],
         "degraded": [],
@@ -49,10 +50,11 @@ def test_execution_targets_includes_builtins_without_module_path() -> None:
     }
     targets = _collect_tool_execution_targets(cap_res)
     ids = {t["id"] for t in targets}
-    assert "filesystem.local.search" in ids
+    assert "filesystem.local.search" not in ids
 
 
-def test_execution_targets_includes_shell_builtin() -> None:
+def test_execution_targets_skips_shell_builtin() -> None:
+    """Shell builtin também é nativo — sem smoke test."""
     cap_res = {
         "available": [{"id": "shell.local.readonly"}],
         "degraded": [],
@@ -60,7 +62,7 @@ def test_execution_targets_includes_shell_builtin() -> None:
     }
     targets = _collect_tool_execution_targets(cap_res)
     ids = {t["id"] for t in targets}
-    assert "shell.local.readonly" in ids
+    assert "shell.local.readonly" not in ids
 
 
 def test_execution_targets_skips_unknown_without_module_path() -> None:
@@ -91,7 +93,8 @@ def test_execution_targets_uses_explicit_module_path_if_present() -> None:
     assert found[0]["module_path"] == "arnaldo.capabilities.custom.CustomCapability"
 
 
-def test_execution_targets_builtin_has_fqn_as_module_path() -> None:
+def test_execution_targets_builtin_excluded_from_results() -> None:
+    """Builtin com fqn real NÃO deve gerar execution target — forge é para dinâmicos."""
     cap_res = {
         "available": [{"id": "filesystem.local.search"}],
         "degraded": [],
@@ -99,5 +102,4 @@ def test_execution_targets_builtin_has_fqn_as_module_path() -> None:
     }
     targets = _collect_tool_execution_targets(cap_res)
     found = [t for t in targets if t["id"] == "filesystem.local.search"]
-    assert len(found) == 1
-    assert "FilesystemSearchCapability" in found[0]["module_path"]
+    assert len(found) == 0

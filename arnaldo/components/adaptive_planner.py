@@ -281,7 +281,7 @@ def build_priority_actions(
 
 
 def should_forge(text: str, capability_hints: List[Dict[str, Any]], session: SessionState) -> bool:
-    from arnaldo.capabilities.registry import _BUILTIN_CAPABILITIES
+    from arnaldo.capabilities.catalog import get_catalog
 
     lowered = text.lower()
     if any(
@@ -291,7 +291,8 @@ def should_forge(text: str, capability_hints: List[Dict[str, Any]], session: Ses
         return True
     # Filtrar builtins — não forjar o que já existe
     if capability_hints:
-        missing = [h for h in capability_hints if h["id"] not in _BUILTIN_CAPABILITIES]
+        catalog = get_catalog()
+        missing = [h for h in capability_hints if not catalog.can_execute(h["id"])]
         if missing:
             return True
     return False

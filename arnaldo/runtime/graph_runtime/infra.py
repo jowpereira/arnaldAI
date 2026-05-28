@@ -129,7 +129,7 @@ def _normalize_execution_payload(result: Any) -> dict[str, Any]:
         normalized = {}
     normalized["_meta"] = {
         "success": result.success,
-        "fallback_used": result.fallback_used,
+        "degraded": result.degraded,
         "tier": result.tier,
         "refusal": result.refusal,
         "error": result.error,

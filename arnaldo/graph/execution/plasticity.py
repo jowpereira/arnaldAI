@@ -14,7 +14,7 @@ from .context import SynapseExecutionResult
 def _edge_success_from_result(result: SynapseExecutionResult | None) -> bool | None:
     if result is None:
         return None
-    if result.fallback_used:
+    if result.degraded:
         return None
     return bool(result.success)
 

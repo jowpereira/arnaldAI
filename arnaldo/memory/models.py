@@ -131,7 +131,7 @@ def memory_synapse_id(key: str) -> str:
     return f"synmem_{digest}"
 
 
-def association_signature(payload: dict[str, Any], *, fallback: str) -> str:
+def association_signature(payload: dict[str, Any], *, default: str) -> str:
     action = str(payload.get("action", "")).strip().lower()
     capability_id = str(payload.get("capability_id", "")).strip().lower()
     agent_id = str(payload.get("agent_id", "")).strip().lower()
@@ -150,7 +150,7 @@ def association_signature(payload: dict[str, Any], *, fallback: str) -> str:
         summary_tokens = re.findall(r"[a-z0-9_]{3,}", summary)
         if summary_tokens:
             return "|".join([record_kind or "memory", "summary", "_".join(summary_tokens[:6])])
-    return str(fallback).strip() or "memory"
+    return str(default).strip() or "memory"
 
 
 def parse_dt(value: Any) -> datetime:

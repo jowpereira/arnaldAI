@@ -10,7 +10,8 @@ from dataclasses import fields
 from typing import get_origin
 from unittest.mock import patch
 
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.graph import CapabilityNode, CognitiveGraph, EdgeKind, GraphEdge, NodeKind, SynapseNode
 from arnaldo.kernel import ArnaldoKernel
 from arnaldo.kernel.agents import build_graph_native_agents
@@ -119,7 +120,7 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             memory=MemoryStore(base / "memory"),
             session_manager=SessionManager(base / "sessions"),
             tool_forge=ToolForge(base / "tool_forge"),
-            capabilities=CapabilityRegistry(registry_path=base / "capability_registry.json"),
+            capabilities=CapabilityCatalog(registry_path=base / "capability_registry.json"),
             sandbox_manager=SandboxManager(base / "sandboxes"),
             proactivity=ProactivityManager(base / "proactivity"),
         )
@@ -284,7 +285,8 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         self.assertEqual(workflow[0]["max_retries"], 0)
         self.assertEqual(workflow[0]["retry_attempts"], 1)
 
-    def test_graph_runtime_keeps_tooling_steps_for_available_shell_capability(self) -> None:
+    def test_graph_runtime_skips_execute_tooling_for_builtin_shell_capability(self) -> None:
+        """Builtins não recebem execute_tooling — já têm implementação nativa."""
         runtime = GraphRuntime(llm_client=AlwaysSuccessClient())
         organization = SimpleNamespace(
             topology="pipeline_with_critic",
@@ -317,7 +319,7 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
         )
 
         actions = [str(item.get("action", "")) for item in workflow]
-        self.assertIn("execute_tooling", actions)
+        self.assertNotIn("execute_tooling", actions)
         self.assertGreater(len(workflow), 1)
 
     def test_graph_runtime_materializes_latency_sensitive_cli_turn_as_single_fast_step(
@@ -558,7 +560,10 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 run_id="run_runtime_order",
                 task=SimpleNamespace(
                     id="task_runtime_order",
-                    goal={"statement": "validar ordem materializada", "type": "analyze_or_evaluate"},
+                    goal={
+                        "statement": "validar ordem materializada",
+                        "type": "analyze_or_evaluate",
+                    },
                     constraints=[],
                     uncertainty=[],
                     deliverables=[{"id": "primary_artifact"}],
@@ -727,7 +732,7 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 (base / "capability_registry.json").read_text(encoding="utf-8")
             )
             custom = next(item for item in registry_payload if item["id"] == "connector.custom")
-            self.assertNotIn("module_path", custom["policies"])
+            self.assertFalse(custom.get("module_path", ""))
 
     def test_sync_capabilities_persists_real_execution_signals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -776,8 +781,8 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
                 (base / "capability_registry.json").read_text(encoding="utf-8")
             )
             runtime = next(item for item in registry_payload if item["id"] == "connector.runtime")
-            self.assertEqual(runtime["policies"]["real_execution_successes"], 7)
-            self.assertEqual(runtime["policies"]["last_tool_execution_status"], "executed")
+            self.assertEqual(runtime["real_execution_successes"], 7)
+            self.assertEqual(runtime["last_tool_execution_status"], "executed")
 
     def test_kernel_graph_runtime_defers_workflow_to_runtime_graph(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -841,7 +846,9 @@ class GraphRuntimeIntegrationTest(unittest.TestCase):
             {"available": [{"id": "shell.local.readonly"}], "missing": [], "degraded": []},
         )
 
-        self.assertIn("UserRequest: dentro do desckto tem uma asta worksace, consegue fazerum ls", request)
+        self.assertIn(
+            "UserRequest: dentro do desckto tem uma asta worksace, consegue fazerum ls", request
+        )
         self.assertIn("CapabilityNeeds:", request)
 
     def test_build_request_for_lightweight_conversation_uses_direct_chat_contract(self) -> None:

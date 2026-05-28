@@ -10,28 +10,22 @@ from typing import Any
 from arnaldo.graph.events import EventKind, GraphEvent
 
 from .base import CapabilityBase, CapabilityResult, make_source
+from .catalog import CapabilityCatalog, get_catalog
 
 logger = logging.getLogger("arnaldo.capabilities")
 
-# Mapping estático: capability_id → módulo.classe
-_BUILTIN_CAPABILITIES: dict[str, str] = {
-    "search.public_web": "arnaldo.capabilities.web_search.WebSearchCapability",
-    "connector.http.generic": "arnaldo.capabilities.http_connector.HttpConnectorCapability",
-    "filesystem.local.search": "arnaldo.capabilities.filesystem_search.FilesystemSearchCapability",
-    "shell.local.readonly": "arnaldo.capabilities.local_shell.LocalShellCapability",
-}
-
 
 class CapabilityExecutor:
-    """Resolve e executa capabilities por ID."""
+    """Resolve e executa capabilities por ID via catálogo unificado."""
 
-    def __init__(self) -> None:
+    def __init__(self, catalog: CapabilityCatalog | None = None) -> None:
+        self._catalog = catalog or get_catalog()
         self._cache: dict[str, CapabilityBase] = {}
         self._events: list[GraphEvent] = []
 
     def can_execute(self, capability_id: str) -> bool:
         """Verifica se a capability tem implementação real."""
-        return capability_id in _BUILTIN_CAPABILITIES
+        return self._catalog.can_execute(capability_id)
 
     def drain_events(self) -> list[GraphEvent]:
         """Retorna e limpa eventos pendentes — I6 compliance."""
@@ -97,7 +91,8 @@ class CapabilityExecutor:
         if capability_id in self._cache:
             return self._cache[capability_id]
 
-        fqn = _BUILTIN_CAPABILITIES.get(capability_id)
+        descriptor = self._catalog.get(capability_id)
+        fqn = descriptor.fqn if descriptor and not descriptor.internal else None
         if not fqn:
             return None
 

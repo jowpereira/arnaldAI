@@ -115,7 +115,7 @@ class GraphRuntime(RuntimeAdapter):
             self.llm_client and getattr(self.llm_client, "is_configured", False)
         ):
             raise RuntimeError(
-                "strict_real habilitado: GraphRuntime exige LLM configurado (sem fallback)."
+                "strict_real habilitado: GraphRuntime exige LLM configurado (modo strict)."
             )
         sandbox = context.sandbox or {}
         workspace_path = _resolve_sandbox_dir(sandbox.get("workspace_path"))

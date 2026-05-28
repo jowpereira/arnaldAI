@@ -203,7 +203,7 @@ class GraphNode:
 
         * id único e prefixado pelo tipo
         * kind correto (cada subclasse define DEFAULT_KIND)
-        * source não-vazia (fallback bootstrap)
+        * source não-vazia (default bootstrap)
         """
         if cls.DEFAULT_KIND is None and "kind" not in fields:
             raise TypeError(f"{cls.__name__} sem DEFAULT_KIND deve passar kind=... explicitamente")

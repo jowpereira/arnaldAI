@@ -44,7 +44,7 @@ class TestLLMAsAgent:
         llm_targets = [e.target_id for e in edges if e.target_id.startswith("syn-llm-")]
         assert "syn-llm-fast" in llm_targets
 
-    def test_fallback_to_payload_tier_without_llm_edge(self) -> None:
+    def test_uses_payload_tier_without_llm_edge(self) -> None:
         """Se synapse não tem REQUIRES para LLM, usa tier_preference do payload."""
         graph = CognitiveGraph()
         syn = SynapseNode.specialist(

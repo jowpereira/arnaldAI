@@ -704,7 +704,7 @@ HALF_LIVES = {
     "capability":      timedelta(days=90),    # tools permanecem
     "semantic_stable": timedelta(days=180),   # fatos gerais
     "procedural":      timedelta(days=365),   # skills duradouras
-    "__fallback__":    timedelta(days=60),
+    "__default__":    timedelta(days=60),
 }
 ```
 
@@ -1961,7 +1961,7 @@ type coercion, refusal handling, retry), `tests/test_graph_execution.py`
 Estado funcional atual do runtime: o `GraphRuntime` já enriquece workflow
 dinamicamente (incluindo steps de tooling ausente/degradado) e aplica evolução
 de maturidade de `CapabilityNode` após execuções bem-sucedidas. O kernel
-sincroniza essas capabilities do grafo para o `CapabilityRegistry`, fechando
+sincroniza essas capabilities do grafo para o `CapabilityCatalog`, fechando
 o loop de aprendizagem entre runs. Em modo `graph`, o kernel já produz
 organização seed com `workflow=[]`, delegando ao runtime a compilação do plano
 executável diretamente no grafo.
@@ -2773,7 +2773,7 @@ O. Hierarquia Composicional
 | `storage/run_store.py`      | 49     | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
 | `runtime/sandbox.py`        | 81     | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐ |
 | `policy_engine.py`          | 105    | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐ |
-| `capability_registry.py`    | 119    | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
+| `capabilities/catalog.py`   | ~250   | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
 | `tool_forge.py`             | 137    | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐ | ⭐ |
 | `llm/*`                     | ~600   | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
 | `runtime/local.py`          | 277    | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐ | ⭐ |

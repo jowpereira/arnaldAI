@@ -181,7 +181,7 @@ def _python_type_to_json_schema(tp: Any, *, strict: bool) -> dict[str, Any]:
     if tp in primitive_map:
         return dict(primitive_map[tp])
 
-    # Tipo desconhecido: fallback conservador
+    # Tipo desconhecido: default conservador
     return {"type": "string"}
 
 

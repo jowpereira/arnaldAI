@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from arnaldo.components import CapabilityRegistry, ToolForge
+from arnaldo.capabilities.catalog import CapabilityCatalog
+from arnaldo.components import ToolForge
 from arnaldo.contracts import EvidenceRecord, TaskIR, new_id, to_dict, utc_now
 from arnaldo.memory import MemoryRecord, MemoryStore
 from arnaldo.session import SessionManager, SessionState
@@ -210,7 +211,7 @@ def apply_session_autonomy_overrides(
 
 def run_tool_forge(
     tool_forge: ToolForge,
-    capabilities: CapabilityRegistry,
+    capabilities: CapabilityCatalog,
     sessions: SessionManager,
     missing: Any,
     session: SessionState,
@@ -221,7 +222,14 @@ def run_tool_forge(
     """Executa forge para capabilities faltantes."""
     report = tool_forge.forge_missing(copy.deepcopy(missing), session.id)
     for capability in report["capabilities"]:
-        capabilities.register(capability)
+        capabilities.register_dynamic(
+            capability.id,
+            name=capability.name,
+            description=capability.description,
+            module_path=str(capability.policies.get("module_path", "")),
+            maturity=str(capability.policies.get("maturity", "draft")),
+            health=str(capability.risk.get("health", "degraded")),
+        )
     for item in report["created"]:
         evidence(
             store,

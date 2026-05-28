@@ -41,7 +41,7 @@
 | Cognitive control | `arnaldo/components/cognitive_control.py` |
 | Adaptive planner | `arnaldo/components/adaptive_planner.py` |
 | Policy engine | `arnaldo/components/policy_engine.py` |
-| Capability registry | `arnaldo/components/capability_registry.py` |
+| Capability catalog | `arnaldo/capabilities/catalog.py` |
 | Tool forge | `arnaldo/components/tool_forge.py` |
 | Organization generator | `arnaldo/components/organization_generator.py` |
 

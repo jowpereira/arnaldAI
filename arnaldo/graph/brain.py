@@ -83,7 +83,13 @@ def activate(
     Phase 4: Merge — decisão final
     """
     if graph.node_count == 0:
-        return _fallback_decision()
+        return BrainDecision(
+            primary_synapse=None,
+            tier="fast",
+            complexity="conversational",
+            skip_full_pipeline=True,
+            needs_external_data=False,
+        )
 
     # G6: Single scan — all kinds at once
     matcher = HybridMatcher(
@@ -208,13 +214,3 @@ def _recall_memories(
                 recalled[m.node.id] = m
 
     return sorted(recalled.values(), key=lambda m: m.score, reverse=True)[:max_memories]
-
-
-def _fallback_decision() -> BrainDecision:
-    return BrainDecision(
-        primary_synapse=None,
-        tier="fast",
-        complexity="conversational",
-        skip_full_pipeline=True,
-        needs_external_data=False,
-    )

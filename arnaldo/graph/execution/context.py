@@ -182,4 +182,4 @@ class SynapseExecutionResult:
     output: Any | None = None
     refusal: str | None = None
     error: str | None = None
-    fallback_used: bool = False
+    degraded: bool = False

@@ -3,7 +3,7 @@
 Cobre:
 - Carregamento de config via .env
 - Roteamento task → tier
-- Comportamento estrito do IntentCompiler sem fallback por padrão
+- Comportamento estrito do IntentCompiler por padrão
 - Validação de payload do LLM
 """
 from __future__ import annotations
@@ -255,7 +255,7 @@ class IntentCompilerLLMStrictTest(unittest.TestCase):
         compiler = IntentCompiler(llm_client=fake)
         intent = compiler.compile("analise o mercado de clinicas", autonomy="assistido")
 
-        # primary_goal inválido foi descartado, fallback heurístico aplica
+        # primary_goal inválido foi descartado, heurística aplica
         self.assertEqual(intent.primary_goal, "analyze_or_evaluate")
         # desired_state válido foi aceito
         self.assertEqual(intent.desired_state, "estado X")
@@ -267,7 +267,7 @@ class IntentCompilerLLMStrictTest(unittest.TestCase):
             compiler.compile("Crie um plano de marketing", autonomy="assistido")
         self.assertEqual(len(fake.calls), 1)
 
-    def test_compiler_can_fallback_when_strict_disabled(self) -> None:
+    def test_compiler_uses_heuristic_when_strict_disabled(self) -> None:
         fake = FakeLLMClient(fail=True)
         compiler = IntentCompiler(llm_client=fake, strict_real=False)
         intent = compiler.compile("Crie um plano para um SaaS B2B", autonomy="assistido")

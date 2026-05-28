@@ -16,7 +16,7 @@ from . import tooling as _tooling
 
 
 class ExecutionEngine:
-    """Executa `SynapseNode` com `chat_typed`, fallback e feedback Hebb."""
+    """Executa `SynapseNode` com `chat_typed` e feedback Hebb."""
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class ExecutionEngine:
                 raise RuntimeError(
                     f"strict_real habilitado: synapse '{node.id}' sem output_contract_model."
                 )
-            return _defaults._fallback_result(
+            return _defaults._degraded_result(
                 node=node,
                 tier=tier,
                 context=ctx,
@@ -105,7 +105,7 @@ class ExecutionEngine:
                 raise RuntimeError(
                     f"strict_real habilitado: llm_client indisponível para synapse '{node.id}'."
                 )
-            return _defaults._fallback_result(
+            return _defaults._degraded_result(
                 node=node,
                 tier=tier,
                 context=ctx,

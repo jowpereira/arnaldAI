@@ -5,6 +5,19 @@ Cada capability implementa ``CapabilityBase`` e é registrada pelo
 """
 
 from .base import CapabilityBase, CapabilityResult
+from .catalog import CapabilityCatalog, CapabilityDescriptor, get_catalog
+from .needs import CapabilityNeed, need_from_id, need_to_dict, needs_from_ids
 from .registry import CapabilityExecutor
 
-__all__ = ["CapabilityBase", "CapabilityResult", "CapabilityExecutor"]
+__all__ = [
+    "CapabilityBase",
+    "CapabilityCatalog",
+    "CapabilityDescriptor",
+    "CapabilityExecutor",
+    "CapabilityNeed",
+    "CapabilityResult",
+    "get_catalog",
+    "need_from_id",
+    "need_to_dict",
+    "needs_from_ids",
+]

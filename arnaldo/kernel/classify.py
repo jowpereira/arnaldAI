@@ -28,6 +28,7 @@ class RequestComplexity:
         "capability_needs",
         "execution_profile",
         "execution_capability_ids",
+        "strict_on_llm_failure",
     )
 
     def __init__(
@@ -42,6 +43,7 @@ class RequestComplexity:
         capability_needs: list[str] | None = None,
         execution_profile: str = "full_pipeline",
         execution_capability_ids: list[str] | None = None,
+        strict_on_llm_failure: bool = True,
     ) -> None:
         self.level = level
         self.reason = reason
@@ -52,6 +54,7 @@ class RequestComplexity:
         self.capability_needs = capability_needs or []
         self.execution_profile = execution_profile
         self.execution_capability_ids = execution_capability_ids or []
+        self.strict_on_llm_failure = strict_on_llm_failure
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -64,6 +67,7 @@ class RequestComplexity:
             "capability_needs": self.capability_needs,
             "execution_profile": self.execution_profile,
             "execution_capability_ids": self.execution_capability_ids,
+            "strict_on_llm_failure": self.strict_on_llm_failure,
         }
 
 
@@ -91,7 +95,10 @@ def _signals_to_complexity(signals: IntentSignals) -> RequestComplexity:
         needs_external_data=signals.needs_external_data,
         capability_ids=signals.capability_needs,
     )
-    use_retrieval = signals.complexity != "conversational" or profile.name == "inline_capability"
+    use_retrieval = signals.complexity != "conversational" or profile.name in (
+        "live_lookup",
+        "tool_execution_local",
+    )
 
     return RequestComplexity(
         signals.complexity,
@@ -103,4 +110,5 @@ def _signals_to_complexity(signals: IntentSignals) -> RequestComplexity:
         capability_needs=signals.capability_needs,
         execution_profile=profile.name,
         execution_capability_ids=list(profile.inline_capability_ids),
+        strict_on_llm_failure=profile.strict_on_llm_failure,
     )

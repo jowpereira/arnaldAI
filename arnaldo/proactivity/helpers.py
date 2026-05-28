@@ -33,7 +33,7 @@ def is_generic_uncertainty(question: str) -> bool:
 
 
 def parse_dt(raw: Any) -> datetime:
-    """Parse ISO datetime com fallback para datetime.min UTC."""
+    """Parse ISO datetime com default para datetime.min UTC."""
     if isinstance(raw, datetime):
         return raw.astimezone(timezone.utc) if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
     text = str(raw or "").strip()

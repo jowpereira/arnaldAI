@@ -101,7 +101,7 @@ class DecayPolicy:
     +---------------------+------------+-------------------------------------+
 
     O sistema permite domínios customizados — qualquer string é aceita; o
-    default (``__fallback__``) é aplicado quando não há regra explícita.
+    default (``__default__``) é aplicado quando não há regra explícita.
     """
 
     half_lives: dict[str, timedelta] = field(
@@ -117,7 +117,7 @@ class DecayPolicy:
             "factual": timedelta(days=180),
             "procedural": timedelta(days=365),
             "operational": timedelta(days=14),
-            "__fallback__": timedelta(days=60),
+            "__default__": timedelta(days=60),
         }
     )
 
@@ -128,8 +128,8 @@ class DecayPolicy:
     """Abaixo deste peso efetivo, o nó é marcado ``STALE`` (precisa re-foragem)."""
 
     def half_life_for(self, domain: str) -> timedelta:
-        """Retorna half-life para um domínio, com fallback."""
-        return self.half_lives.get(domain, self.half_lives["__fallback__"])
+        """Retorna half-life para um domínio, com default."""
+        return self.half_lives.get(domain, self.half_lives["__default__"])
 
     def decay_factor(self, domain: str, elapsed: timedelta) -> float:
         """Retorna fator multiplicativo ``∈ (0,1]`` aplicado ao peso.

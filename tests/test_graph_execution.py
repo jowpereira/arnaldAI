@@ -92,7 +92,7 @@ def test_execute_synapse_success_updates_context_and_plasticity() -> None:
     result = engine.execute_synapse(synapse.id, request="analise este plano", context=ctx)
 
     assert result.success is True
-    assert result.fallback_used is False
+    assert result.degraded is False
     assert synapse.id in ctx.outputs
     assert isinstance(ctx.outputs[synapse.id], SynapseOutput)
     updated = graph.get_node(synapse.id)
@@ -262,7 +262,7 @@ def test_execute_synapse_refusal_raises_in_strict_mode() -> None:
     assert updated.weight < 0.5
 
 
-def test_execute_synapse_fallback_when_model_missing() -> None:
+def test_execute_synapse_degraded_when_model_missing() -> None:
     graph, synapse = _build_graph_with_synapse()
     client = FakeTypedClient(responses=[_typed_success()])
     engine = ExecutionEngine(
@@ -276,11 +276,11 @@ def test_execute_synapse_fallback_when_model_missing() -> None:
     result = engine.execute_synapse(synapse.id, request="analise", context=ctx)
 
     assert result.success is False
-    assert result.fallback_used is True
+    assert result.degraded is True
     assert result.output["reason"] == "missing_output_contract_model"
     updated = graph.get_node(synapse.id)
     assert updated is not None
-    # fallback não reforça nem penaliza peso
+    # degraded não reforça nem penaliza peso
     assert updated.stats.successes == 0
     assert updated.stats.failures == 0
     assert updated.stats.activations == 1

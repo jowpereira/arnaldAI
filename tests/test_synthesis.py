@@ -185,7 +185,7 @@ def test_extract_step_content_empty_dict_result() -> None:
     """Dict vazio como result não deve retornar '{}'."""
     step = {"output": "primary_artifact", "result": {}}
     content = _extract_step_content(step)
-    # Dict vazio é tratado como ausência — cai no fallback
+    # Dict vazio é tratado como ausência — usa default
     assert content != "{}"
 
 

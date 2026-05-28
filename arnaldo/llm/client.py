@@ -181,7 +181,7 @@ class AzureOpenAIClient:
         """Streaming interface — yields content chunks via SSE.
 
         Usa stream=true na Azure OpenAI e parseia Server-Sent Events.
-        Fallback: yield completo se streaming falhar.
+        Retry: yield completo se streaming falhar.
         """
         tier_cfg = self.config.tiers.get(tier)
         if tier_cfg is None:
@@ -209,7 +209,7 @@ class AzureOpenAIClient:
             response = urllib.request.urlopen(request, timeout=self.config.timeout_seconds)
             yield from self._parse_sse_stream(response)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
-            # Fallback: chamada não-streaming
+            # Retry: chamada não-streaming
             resp = self.chat(tier=tier, messages=messages, **kwargs)
             yield resp.content
 
